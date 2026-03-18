@@ -31,10 +31,10 @@ COPY routers/ ./routers/
 # Built frontend (FastAPI will serve this as static files)
 COPY --from=frontend-builder /app/frontend/dist ./static
 
-# Upload temp dir + data dir (SQLite + GPX cache)
-RUN mkdir -p /tmp/dashtrack /data /footage
+# Upload temp dir + dashtrack data dirs
+RUN mkdir -p /tmp/dashtrack /dashtrack/footage /dashtrack/data /dashtrack/gpx
 
-VOLUME ["/footage", "/data"]
+VOLUME ["/dashtrack/footage", "/dashtrack/data", "/dashtrack/gpx"]
 
 EXPOSE 8000
 

@@ -303,8 +303,16 @@ export default function MapView() {
         <MapBtn active={followCar} onClick={() => setFollowCar(!followCar)}>
           <Dot active={followCar} /> Follow car
         </MapBtn>
-        <MapBtn onClick={() => setMapStyle(mapStyle === 'satellite-streets-v12' ? 'dark-v11' : 'satellite-streets-v12')}>
-          <Dot color="var(--acc2)" /> {mapStyle === 'satellite-streets-v12' ? 'Satellite' : 'Dark'}
+        <MapBtn onClick={() => setMapStyle(
+          mapStyle === 'satellite-streets-v12' ? 'dark-v11'
+          : mapStyle === 'dark-v11' ? 'streets-v12'
+          : 'satellite-streets-v12'
+        )}>
+          <Dot color="var(--acc2)" /> {
+            mapStyle === 'satellite-streets-v12' ? 'Satellite'
+            : mapStyle === 'dark-v11' ? 'Dark'
+            : 'Light'
+          }
         </MapBtn>
       </div>
 

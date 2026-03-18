@@ -1,0 +1,16 @@
+services:
+  dashtrack:
+    container_name: dashtrack
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8000"
+    volumes:
+      - /dashtrack/footage:/dashtrack/footage:ro   # source MP4 files (read-only)
+      - /dashtrack/data:/dashtrack/data        # SQLite database
+      - /dashtrack/gpx:/dashtrack/gpx          # cached GPX files
+    environment:
+      FOOTAGE_DIR: /dashtrack/footage
+      DATA_DIR: /dashtrack/data
+      GPX_DIR: /dashtrack/gpx
+      VITE_MAPBOX_TOKEN: ${VITE_MAPBOX_TOKEN}

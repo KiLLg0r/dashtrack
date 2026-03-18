@@ -52,33 +52,6 @@ export default function App() {
     }
   }, [swapped])
 
-  // Seek handler — delegates to MultiVideoPlayer via custom event for multi-segment
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const { idx } = (e as CustomEvent).detail
-      const { points, multiSession } = useStore.getState()
-      if (!points.length) return
-
-      if (multiSession) {
-        // MultiVideoPlayer handles multi-segment seeks internally via dashtrack:seek listener
-        // (it reads multiSession state directly)
-        return
-      }
-
-      // Single clip — seek primary video element
-      const vid = document.querySelector('video[data-channel="primary"]') as HTMLVideoElement | null
-        ?? document.querySelector('video') as HTMLVideoElement | null
-      if (!vid) return
-      const p = points[idx]
-      if (!p) return
-      const preciseSync = points.some(pt => pt.videoSec > 0)
-      if (preciseSync) vid.currentTime = p.videoSec
-      else vid.currentTime = (idx / (points.length - 1)) * (vid.duration || 0)
-    }
-    window.addEventListener('dashtrack:seek', handler)
-    return () => window.removeEventListener('dashtrack:seek', handler)
-  }, [])
-
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {

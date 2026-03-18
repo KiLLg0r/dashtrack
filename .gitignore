@@ -12,3 +12,4 @@ CLAUDE.md
 context.md
 __pycache__/
 *.pyc
+.python-version

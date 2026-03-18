@@ -1,3 +1,8 @@
+// In dev, the Vite proxy buffers responses and strips Content-Length / range
+// headers, making <video> elements non-seekable. Point directly at the backend
+// for footage URLs so the browser gets proper HTTP 206 Range responses.
+export const FOOTAGE_BASE = import.meta.env.DEV ? 'http://localhost:8080' : ''
+
 export interface LibraryClip {
   id: string
   filename: string

@@ -10,7 +10,7 @@ from typing import Optional
 
 from sqlmodel import Field, SQLModel, create_engine
 
-DATA_DIR = Path(os.getenv('DATA_DIR', '/data'))
+DATA_DIR = Path(os.getenv('DATA_DIR', '/dashtrack/data'))
 
 
 class Clip(SQLModel, table=True):

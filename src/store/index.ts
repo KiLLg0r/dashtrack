@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { LibraryClip, LibraryClipDetail } from '../api/library'
+import { FOOTAGE_BASE } from '../api/library'
 import { parseGPX } from '../hooks/useGPX'
 
 export interface GPSPoint {
@@ -13,9 +14,10 @@ export interface GPSPoint {
 }
 
 export type ExtractionStatus = 'idle' | 'uploading' | 'extracting' | 'done' | 'error'
-export type MapStyle = 'satellite-streets-v12' | 'dark-v11'
+export type MapStyle = 'satellite-streets-v12' | 'dark-v11' | 'streets-v12'
 export type AppMode = 'upload' | 'library' | 'session-builder'
 export type VideoLayout = 'single' | 'side-by-side' | 'pip'
+export type ChannelFilter = 'all' | 'front' | 'rear'
 
 // ── Multi-channel ──────────────────────────────────────────────
 export interface Channel {
@@ -104,9 +106,11 @@ interface DashState {
   channels: Channel[]
   primaryChannelId: string
   videoLayout: VideoLayout
+  channelFilter: ChannelFilter
   setChannels: (ch: Channel[]) => void
   setPrimaryChannelId: (id: string) => void
   setVideoLayout: (l: VideoLayout) => void
+  setChannelFilter: (f: ChannelFilter) => void
   loadSession: (clips: LibraryClipDetail[]) => void
 
   // Multi-segment
@@ -186,7 +190,7 @@ export const useStore = create<DashState>((set, get) => ({
     const pts = clip.gpx ? parseGPX(clip.gpx) : []
     set({
       points: pts,
-      videoUrl: `/api/footage/${clip.id}`,
+      videoUrl: `${FOOTAGE_BASE}/api/footage/${clip.id}`,
       videoFile: null,
       videoTime: 0,
       videoDuration: clip.duration_sec ?? 0,
@@ -198,7 +202,7 @@ export const useStore = create<DashState>((set, get) => ({
       channels: [{
         id: clip.channel,
         clipId: clip.id,
-        videoUrl: `/api/footage/${clip.id}`,
+        videoUrl: `${FOOTAGE_BASE}/api/footage/${clip.id}`,
         videoDuration: clip.duration_sec ?? 0,
         label: clip.channel === 'front' ? 'FRONT' : clip.channel === 'rear' ? 'REAR' : 'VIDEO',
       }],
@@ -211,9 +215,11 @@ export const useStore = create<DashState>((set, get) => ({
   channels: [],
   primaryChannelId: 'front',
   videoLayout: 'single',
+  channelFilter: 'all',
   setChannels: (channels) => set({ channels }),
   setPrimaryChannelId: (id) => set({ primaryChannelId: id }),
   setVideoLayout: (l) => set({ videoLayout: l }),
+  setChannelFilter: (f) => set({ channelFilter: f }),
 
   loadSession: (clips) => {
     // GPS always from front channel; fall back to first clip
@@ -222,7 +228,7 @@ export const useStore = create<DashState>((set, get) => ({
     const channels: Channel[] = clips.map(c => ({
       id: c.channel,
       clipId: c.id,
-      videoUrl: `/api/footage/${c.id}`,
+      videoUrl: `${FOOTAGE_BASE}/api/footage/${c.id}`,
       videoDuration: c.duration_sec ?? 0,
       label: c.channel === 'front' ? 'FRONT' : c.channel === 'rear' ? 'REAR' : 'VIDEO',
     }))
@@ -231,7 +237,7 @@ export const useStore = create<DashState>((set, get) => ({
       points: pts,
       channels,
       primaryChannelId: primaryId,
-      videoUrl: `/api/footage/${clips.find(c => c.channel === primaryId)?.id ?? clips[0]?.id}`,
+      videoUrl: `${FOOTAGE_BASE}/api/footage/${clips.find(c => c.channel === primaryId)?.id ?? clips[0]?.id}`,
       videoFile: null,
       videoTime: 0,
       videoDuration: (clips.find(c => c.channel === primaryId) ?? clips[0])?.duration_sec ?? 0,

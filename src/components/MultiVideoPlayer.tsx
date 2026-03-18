@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   MdPlayArrow, MdPause, MdReplay10, MdForward10,
-  MdVolumeUp, MdVolumeDown, MdVolumeMute,
-  MdFullscreen, MdFullscreenExit,
+  MdVolumeUp, MdVolumeDown, MdVolumeOff,
 } from 'react-icons/md'
 import { useStore } from '../store'
 import { fmtTime } from '../hooks/useGPX'
@@ -11,42 +10,64 @@ import VideoChannel from './VideoChannel'
 export default function MultiVideoPlayer() {
   const {
     channels, primaryChannelId, videoLayout, setVideoLayout,
+    channelFilter, setChannelFilter,
     videoUrl, videoTime, playing, playbackRate, volume, muted, videoDuration, swapped,
     multiSession, activeClipIndex, setActiveClipIndex,
     setVideoDuration, setVideoTime, setPlaying, setPlaybackRate,
     setVolume, setMuted, idxAtTime, setCurrentIdx,
   } = useStore()
 
-  // Refs: one per channel, keyed by channel id
-  const vidRefs = useRef<Map<string, HTMLVideoElement>>(new Map())
-  const containerRef = useRef<HTMLDivElement>(null)
-  const seekDrag = useRef(false)
-  const volDrag = useRef(false)
-  const [isFullscreen, setIsFullscreen] = useState(false)
+  const vidRefs      = useRef<Map<string, HTMLVideoElement>>(new Map())
+  const refCallbacks = useRef(new Map<string, (el: HTMLVideoElement | null) => void>())
+  const seekDrag     = useRef(false)
+  const volDrag      = useRef(false)
+  const isSeeking    = useRef(false)
   const [volInput, setVolInput] = useState(String(Math.round(volume * 100)))
-  const preloadRef = useRef<HTMLVideoElement | null>(null)
 
-  // Determine what to render — channels[] when library loaded, fallback to videoUrl for upload
-  const displayChannels = channels.length > 0
+  // All channels available from store (or single upload fallback)
+  const allChannels = channels.length > 0
     ? channels
     : videoUrl
-      ? [{ id: 'upload', clipId: null, videoUrl, videoDuration, label: '' }]
+      ? [{ id: 'upload', clipId: null as null, videoUrl, videoDuration, label: '' }]
       : []
 
-  const primaryChannel = displayChannels.find(c => c.id === primaryChannelId) ?? displayChannels[0]
-  const hasMultiChannel = displayChannels.length > 1
+  // Apply channel filter
+  const displayChannels = channelFilter === 'all'
+    ? allChannels
+    : allChannels.filter(ch => ch.id === channelFilter || ch.id === 'upload')
 
-  useEffect(() => {
-    const handler = () => setIsFullscreen(!!document.fullscreenElement)
-    document.addEventListener('fullscreenchange', handler)
-    return () => document.removeEventListener('fullscreenchange', handler)
-  }, [])
+  const hasBothChannels = allChannels.length > 1
+  const isSingleChannel = !hasBothChannels
+  const isPip = videoLayout === 'pip' && displayChannels.length > 1
+  const isSideBySide = videoLayout === 'side-by-side' && displayChannels.length > 1
+  const fillHeight = swapped
+
+  // Seek helper — suppresses timeupdate index updates until seek completes.
+  // Listener is added BEFORE setting currentTime to avoid a race where seeked
+  // fires synchronously (buffered seeks in some browsers) before the listener
+  // is registered, which would leave isSeeking.current stuck at true forever.
+  // State is also updated in the seeked callback so the seek bar and map marker
+  // reflect the new position even when the video is paused (timeupdate is
+  // unreliable after a paused seek).
+  const programmaticSeek = (vid: HTMLVideoElement, time: number) => {
+    isSeeking.current = true
+    vid.addEventListener('seeked', () => {
+      isSeeking.current = false
+      setVideoTime(vid.currentTime)
+      setCurrentIdx(idxAtTime(vid.currentTime))
+    }, { once: true })
+    vid.currentTime = time
+  }
+
+  const getPrimaryVid = (): HTMLVideoElement | undefined =>
+    vidRefs.current.get(primaryChannelId)
+    ?? vidRefs.current.values().next().value as HTMLVideoElement | undefined
 
   useEffect(() => {
     setVolInput(String(Math.round((muted ? 0 : volume) * 100)))
   }, [volume, muted])
 
-  // Sync play/pause to all video elements
+  // Sync play/pause
   useEffect(() => {
     vidRefs.current.forEach(v => {
       if (playing) v.play().catch(() => {})
@@ -64,7 +85,7 @@ export default function MultiVideoPlayer() {
     vidRefs.current.forEach(v => { v.volume = volume; v.muted = muted })
   }, [volume, muted])
 
-  // Listen for seek events (from map/timeline clicks)
+  // Single seek event handler — handles both single-clip and multi-segment
   useEffect(() => {
     const handler = (e: Event) => {
       const { idx } = (e as CustomEvent).detail
@@ -72,27 +93,21 @@ export default function MultiVideoPlayer() {
       if (!points.length) return
 
       if (multiSession) {
-        // Multi-segment: find which clip owns this idx and seek into it
         const { clips, clipPointOffsets } = multiSession
         let clipIdx = clips.length - 1
         for (let i = 0; i < clips.length; i++) {
-          const nextOffset = clipPointOffsets[i + 1] ?? Infinity
-          if (idx < nextOffset) { clipIdx = i; break }
+          if (idx < (clipPointOffsets[i + 1] ?? Infinity)) { clipIdx = i; break }
         }
         const clip = clips[clipIdx]
-        const localIdx = idx - clipPointOffsets[clipIdx]
-        const localPoint = clip.gpxPoints[localIdx]
+        const localPoint = clip.gpxPoints[idx - clipPointOffsets[clipIdx]]
         if (!localPoint) return
 
         setActiveClipIndex(clipIdx)
-        // Switch video src if needed
-        const vid = vidRefs.current.get(primaryChannelId) ?? vidRefs.current.values().next().value as HTMLVideoElement | undefined
+        const vid = getPrimaryVid()
         if (vid) {
-          if (vid.src !== clip.videoUrl && !vid.src.endsWith(clip.videoUrl)) {
-            vid.src = clip.videoUrl
-          }
-          vid.currentTime = localPoint.videoSec
-          if (playing) vid.play().catch(() => {})
+          if (!vid.src.endsWith(clip.videoUrl)) vid.src = clip.videoUrl
+          programmaticSeek(vid, localPoint.videoSec)
+          if (useStore.getState().playing) vid.play().catch(() => {})
         }
         return
       }
@@ -100,40 +115,37 @@ export default function MultiVideoPlayer() {
       // Single clip
       const p = points[idx]
       if (!p) return
-      const vid = vidRefs.current.get(primaryChannelId) ?? vidRefs.current.values().next().value as HTMLVideoElement | undefined
+      const vid = getPrimaryVid()
       if (!vid) return
       const preciseSync = points.some(pt => pt.videoSec > 0)
-      if (preciseSync) vid.currentTime = p.videoSec
-      else vid.currentTime = (idx / (points.length - 1)) * (vid.duration || 0)
+      const seekTime = preciseSync ? p.videoSec : (idx / (points.length - 1)) * (vid.duration || 0)
+      programmaticSeek(vid, seekTime)
     }
 
     window.addEventListener('dashtrack:seek', handler)
     return () => window.removeEventListener('dashtrack:seek', handler)
-  }, [primaryChannelId, playing, setActiveClipIndex])
+  }, [primaryChannelId, setActiveClipIndex])
 
   const handleTimeUpdate = (e: React.SyntheticEvent<HTMLVideoElement>) => {
     const v = e.currentTarget
-    if (!v.dataset.channel || v.dataset.channel !== 'primary') return
+    if (v.dataset.channel !== 'primary') return
+    if (isSeeking.current || v.seeking) return
 
     const t = v.currentTime
     setVideoTime(t)
     setCurrentIdx(idxAtTime(t))
 
-    // Sync secondary channels to primary (correct if drift > 0.1s)
+    // Sync secondary channels
     const SYNC_THRESHOLD = 0.1
     vidRefs.current.forEach((sv, id) => {
       if (id === primaryChannelId) return
-      if (Math.abs(sv.currentTime - t) > SYNC_THRESHOLD) {
-        sv.currentTime = t
-      }
+      if (Math.abs(sv.currentTime - t) > SYNC_THRESHOLD) sv.currentTime = t
     })
 
-    // Multi-segment: detect clip boundary
+    // Multi-segment: clip boundary detection
     if (multiSession) {
       const clip = multiSession.clips[activeClipIndex]
-      if (clip && t >= clip.trimEnd - 0.15) {
-        advanceClip()
-      }
+      if (clip && t >= clip.trimEnd - 0.15) advanceClip()
     }
   }
 
@@ -141,30 +153,27 @@ export default function MultiVideoPlayer() {
     const { multiSession, activeClipIndex, playing } = useStore.getState()
     if (!multiSession) return
     const nextIdx = activeClipIndex + 1
-    if (nextIdx >= multiSession.clips.length) {
-      setPlaying(false)
-      return
-    }
+    if (nextIdx >= multiSession.clips.length) { setPlaying(false); return }
     const nextClip = multiSession.clips[nextIdx]
     setActiveClipIndex(nextIdx)
-    const vid = vidRefs.current.get(primaryChannelId) ?? vidRefs.current.values().next().value as HTMLVideoElement | undefined
+    const vid = getPrimaryVid()
     if (vid) {
       vid.src = nextClip.videoUrl
-      vid.currentTime = nextClip.trimStart
+      programmaticSeek(vid, nextClip.trimStart)
       if (playing) vid.play().catch(() => {})
     }
   }
 
   const seek = (sec: number) => {
-    const vid = vidRefs.current.get(primaryChannelId) ?? vidRefs.current.values().next().value as HTMLVideoElement | undefined
+    const vid = getPrimaryVid()
     if (!vid) return
-    vid.currentTime = Math.max(0, Math.min(vid.duration || 0, vid.currentTime + sec))
+    programmaticSeek(vid, Math.max(0, Math.min(vid.duration || 0, vid.currentTime + sec)))
   }
 
   const seekTo = (frac: number) => {
-    const vid = vidRefs.current.get(primaryChannelId) ?? vidRefs.current.values().next().value as HTMLVideoElement | undefined
+    const vid = getPrimaryVid()
     if (!vid || !vid.duration) return
-    vid.currentTime = frac * vid.duration
+    programmaticSeek(vid, frac * vid.duration)
   }
 
   const applyVolInput = (raw: string) => {
@@ -174,32 +183,100 @@ export default function MultiVideoPlayer() {
     setMuted(n === 0)
   }
 
-  const toggleFullscreen = () => {
-    if (!containerRef.current) return
-    if (!document.fullscreenElement) containerRef.current.requestFullscreen()
-    else document.exitFullscreen()
-  }
+  const setRef = useCallback((id: string) => {
+    if (!refCallbacks.current.has(id)) {
+      refCallbacks.current.set(id, (el: HTMLVideoElement | null) => {
+        if (el) vidRefs.current.set(id, el)
+        else vidRefs.current.delete(id)
+      })
+    }
+    return refCallbacks.current.get(id)!
+  }, [])
 
-  const setRef = (id: string) => (el: HTMLVideoElement | null) => {
-    if (el) vidRefs.current.set(id, el)
-    else vidRefs.current.delete(id)
-  }
+  if (!displayChannels.length && !allChannels.length) return null
 
-  if (!displayChannels.length) return null
-
-  const pct = videoDuration ? (videoTime / videoDuration) * 100 : 0
+  const pct    = videoDuration ? (videoTime / videoDuration) * 100 : 0
   const volPct = (muted ? 0 : volume) * 100
   const speedBtns: [number, string][] = [[0.5, '0.5×'], [1, '1×'], [2, '2×'], [4, '4×']]
-  const VolumeIcon = muted || volume === 0 ? MdVolumeMute : volume < 0.5 ? MdVolumeDown : MdVolumeUp
+  const VolumeIcon = muted || volume === 0 ? MdVolumeOff : volume < 0.5 ? MdVolumeDown : MdVolumeUp
 
-  // Layout for video area
-  const videoAreaStyle: React.CSSProperties = (swapped || isFullscreen)
-    ? { display: 'flex', flexDirection: videoLayout === 'side-by-side' ? 'row' : 'column', flex: '1 1 0', minHeight: 0, background: '#000' }
-    : { display: 'flex', flexDirection: videoLayout === 'side-by-side' ? 'row' : 'column', background: '#000' }
+  // ── Video area rendering ───────────────────────────────────────────────────
 
-  const fillHeight = swapped || isFullscreen
+  const channelProps = (ch: typeof displayChannels[0], i: number) => ({
+    ref: setRef(ch.id),
+    videoUrl: ch.videoUrl!,
+    channelId: ch.id,
+    isPrimary: ch.id === primaryChannelId || i === 0,
+    label: hasBothChannels ? ch.label : undefined,
+    containerStyle: (fillHeight || isSideBySide) ? { flex: '1 1 0', minHeight: 0 } as React.CSSProperties : undefined,
+    onTimeUpdate: handleTimeUpdate,
+    onLoadedMetadata: (e: React.SyntheticEvent<HTMLVideoElement>) => {
+      if (ch.id === primaryChannelId || i === 0)
+        setVideoDuration((e.currentTarget as HTMLVideoElement).duration)
+    },
+    onPlay:  () => { if (ch.id === primaryChannelId || i === 0) setPlaying(true)  },
+    onPause: () => { if (ch.id === primaryChannelId || i === 0) setPlaying(false) },
+    onEnded: () => { if (ch.id === primaryChannelId || i === 0) setPlaying(false) },
+  })
 
-  // ── Transport controls ─────────────────────────────────────
+  let videoArea: React.ReactNode
+
+  if (isPip) {
+    // PiP: primary full-size, secondary absolute overlay bottom-right
+    const primary   = displayChannels.find(c => c.id === primaryChannelId) ?? displayChannels[0]
+    const secondary = displayChannels.find(c => c.id !== primary.id)!
+    videoArea = (
+      <div style={{
+        position: 'relative', background: '#000',
+        flex: fillHeight ? '1 1 0' : undefined, minHeight: 0,
+        ...(fillHeight ? {} : { aspectRatio: '16/9' }),
+      }}>
+        <VideoChannel
+          key={primary.id}
+          {...channelProps(primary, 0)}
+          fillHeight
+          containerStyle={{ position: 'absolute', inset: 0, flex: 'none' }}
+        />
+        <div style={{
+          position: 'absolute', bottom: 8, right: 8, width: '28%', zIndex: 10,
+          border: '2px solid rgba(255,255,255,.25)', borderRadius: 5,
+          overflow: 'hidden', boxShadow: '0 2px 12px rgba(0,0,0,.7)',
+        }}>
+          <VideoChannel
+            key={secondary.id}
+            {...channelProps(secondary, 1)}
+            fillHeight={false}
+            containerStyle={{ flex: 'none', width: '100%' }}
+          />
+        </div>
+        <TimeOverlay videoTime={videoTime} videoDuration={videoDuration} />
+      </div>
+    )
+  } else {
+    // Single or side-by-side
+    videoArea = (
+      <div style={{
+        display: 'flex',
+        flexDirection: isSideBySide ? 'row' : 'column',
+        flex: fillHeight ? '1 1 0' : undefined,
+        minHeight: 0,
+        background: '#000',
+        position: 'relative',
+      }}>
+        {displayChannels.map((ch, i) => (
+          <VideoChannel
+            key={ch.id}
+            {...channelProps(ch, i)}
+            fillHeight={fillHeight}
+          />
+        ))}
+        <TimeOverlay videoTime={videoTime} videoDuration={videoDuration} />
+      </div>
+    )
+  }
+
+  // ── Controls ───────────────────────────────────────────────────────────────
+
   const transportBtns = (
     <>
       <IconBtn onClick={() => seek(-10)} title="Back 10s"><MdReplay10 size={22} /></IconBtn>
@@ -210,16 +287,12 @@ export default function MultiVideoPlayer() {
     </>
   )
 
-  const speedGroup = (
-    <>
-      {speedBtns.map(([rate, label]) => (
-        <IconBtn key={rate} onClick={() => setPlaybackRate(rate)} active={playbackRate === rate}>{label}</IconBtn>
-      ))}
-    </>
-  )
+  const speedGroup = speedBtns.map(([rate, label]) => (
+    <IconBtn key={rate} onClick={() => setPlaybackRate(rate)} active={playbackRate === rate}>{label}</IconBtn>
+  ))
 
   const volumeGroup = (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: swapped ? '1 1 0' : undefined, minWidth: 0 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: (swapped || isSingleChannel) ? '1 1 0' : undefined, minWidth: 0 }}>
       <input
         type="number" min={0} max={100} value={volInput}
         onChange={e => setVolInput(e.target.value)}
@@ -234,18 +307,8 @@ export default function MultiVideoPlayer() {
       <style>{`input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}`}</style>
       <div
         style={{ flex: 1, height: 4, background: 'var(--s3)', borderRadius: 2, cursor: 'pointer', border: '1px solid var(--b2)', position: 'relative', minWidth: swapped ? 60 : 40 }}
-        onMouseDown={e => {
-          volDrag.current = true
-          const r = e.currentTarget.getBoundingClientRect()
-          const v = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width))
-          setVolume(v); setMuted(v === 0)
-        }}
-        onMouseMove={e => {
-          if (!volDrag.current) return
-          const r = e.currentTarget.getBoundingClientRect()
-          const v = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width))
-          setVolume(v); setMuted(v === 0)
-        }}
+        onMouseDown={e => { volDrag.current = true; applyVolFrac(e) }}
+        onMouseMove={e => { if (volDrag.current) applyVolFrac(e) }}
         onMouseUp={() => volDrag.current = false}
         onMouseLeave={() => volDrag.current = false}
       >
@@ -257,6 +320,12 @@ export default function MultiVideoPlayer() {
       </IconBtn>
     </div>
   )
+
+  function applyVolFrac(e: React.MouseEvent<HTMLDivElement>) {
+    const r = e.currentTarget.getBoundingClientRect()
+    const v = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width))
+    setVolume(v); setMuted(v === 0)
+  }
 
   const seekBar = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -277,90 +346,73 @@ export default function MultiVideoPlayer() {
     </div>
   )
 
+  // Channel filter buttons — only shown when both F and R are available
+  const channelFilterBtns = hasBothChannels && (
+    <div style={{ display: 'flex', gap: 2, flex: 1 }}>
+      {(['all', 'front', 'rear'] as const).map(f => (
+        <IconBtn
+          key={f}
+          onClick={() => setChannelFilter(f)}
+          active={channelFilter === f}
+          title={f === 'all' ? 'Both channels' : f === 'front' ? 'Front only' : 'Rear only'}
+          fill
+        >
+          {f === 'all' ? 'F+R' : f === 'front' ? 'F' : 'R'}
+        </IconBtn>
+      ))}
+    </div>
+  )
+
+  // Layout toggle — only when showing multiple channels
+  const layoutBtn = displayChannels.length > 1 && (
+    <LayoutBtn layout={videoLayout} onChange={setVideoLayout} />
+  )
+
   return (
-    <div
-      ref={containerRef}
-      style={{
-        display: 'flex', flexDirection: 'column',
-        flexShrink: swapped ? 1 : 0,
-        flex: swapped ? '1 1 0' : undefined,
-        minHeight: 0,
-        ...(isFullscreen ? { width: '100vw', height: '100vh', background: '#000' } : {}),
-      }}
-    >
-      {/* Video area */}
-      <div style={{ ...videoAreaStyle, position: 'relative', flex: (swapped || isFullscreen) ? '1 1 0' : undefined, minHeight: 0 }}>
-        {displayChannels.map((ch, i) => (
-          <VideoChannel
-            key={ch.id}
-            ref={setRef(ch.id)}
-            videoUrl={ch.videoUrl!}
-            channelId={ch.id}
-            isPrimary={ch.id === primaryChannelId || i === 0}
-            label={hasMultiChannel ? ch.label : undefined}
-            fillHeight={fillHeight}
-            onTimeUpdate={handleTimeUpdate}
-            onLoadedMetadata={e => {
-              if (ch.id === primaryChannelId || i === 0) {
-                setVideoDuration((e.currentTarget as HTMLVideoElement).duration)
-              }
-            }}
-            onPlay={() => { if (ch.id === primaryChannelId || i === 0) setPlaying(true) }}
-            onPause={() => { if (ch.id === primaryChannelId || i === 0) setPlaying(false) }}
-            onEnded={() => { if (ch.id === primaryChannelId || i === 0) setPlaying(false) }}
-          />
-        ))}
+    <div style={{
+      display: 'flex', flexDirection: 'column',
+      flexShrink: swapped ? 1 : 0,
+      flex: swapped ? '1 1 0' : undefined,
+      minHeight: 0,
+    }}>
+      {videoArea}
 
-        {/* Timestamp overlay */}
-        <div style={{
-          position: 'absolute', top: 7, right: 8,
-          fontFamily: 'var(--mono)', fontSize: 10,
-          color: 'rgba(255,255,255,.55)', background: 'rgba(0,0,0,.5)',
-          padding: '2px 7px', borderRadius: 4, pointerEvents: 'none',
-        }}>
-          {fmtTime(videoTime)} / {fmtTime(videoDuration)}
-        </div>
-      </div>
-
-      {/* Controls */}
       <div style={{ flexShrink: 0, background: 'var(--s2)', borderBottom: '1px solid var(--b2)', padding: swapped ? '8px 14px' : '10px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
         {seekBar}
 
         {swapped ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
             {transportBtns}
-            <div style={{ width: 1, height: 20, background: 'var(--b3)', flexShrink: 0, margin: '0 2px' }} />
+            <Sep />
             {speedGroup}
-            <div style={{ width: 1, height: 20, background: 'var(--b3)', flexShrink: 0, margin: '0 2px' }} />
+            <Sep />
             {volumeGroup}
-            {hasMultiChannel && (
-              <>
-                <div style={{ width: 1, height: 20, background: 'var(--b3)', flexShrink: 0, margin: '0 2px' }} />
-                <LayoutBtn layout={videoLayout} onChange={setVideoLayout} />
-              </>
-            )}
-            <IconBtn onClick={toggleFullscreen} title="Fullscreen">
-              {isFullscreen ? <MdFullscreenExit size={22} /> : <MdFullscreen size={22} />}
-            </IconBtn>
+            {channelFilterBtns && <><Sep />{channelFilterBtns}</>}
+            {layoutBtn && <><Sep />{layoutBtn}</>}
           </div>
+        ) : isSingleChannel ? (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-evenly' }}>
+              {transportBtns}
+              {speedGroup}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              {volumeGroup}
+            </div>
+          </>
         ) : (
           <>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               {transportBtns}
-              <div style={{ width: 1, height: 20, background: 'var(--b3)', flexShrink: 0, margin: '0 2px' }} />
+              <Sep />
               {speedGroup}
-              {hasMultiChannel && (
-                <>
-                  <div style={{ width: 1, height: 20, background: 'var(--b3)', flexShrink: 0, margin: '0 2px' }} />
-                  <LayoutBtn layout={videoLayout} onChange={setVideoLayout} />
-                </>
-              )}
               <div style={{ flex: 1 }} />
-              <IconBtn onClick={toggleFullscreen} title="Fullscreen">
-                {isFullscreen ? <MdFullscreenExit size={22} /> : <MdFullscreen size={22} />}
-              </IconBtn>
             </div>
-            {volumeGroup}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {volumeGroup}
+              {channelFilterBtns && <><Sep />{channelFilterBtns}</>}
+              {layoutBtn && <><Sep />{layoutBtn}</>}
+            </div>
           </>
         )}
       </div>
@@ -368,22 +420,43 @@ export default function MultiVideoPlayer() {
   )
 }
 
-function LayoutBtn({ layout, onChange }: { layout: string, onChange: (l: any) => void }) {
-  const next: Record<string, string> = { 'single': 'side-by-side', 'side-by-side': 'pip', 'pip': 'single' }
-  const labels: Record<string, string> = { 'single': '▣', 'side-by-side': '⬛⬛', 'pip': '⬛◻' }
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+function TimeOverlay({ videoTime, videoDuration }: { videoTime: number; videoDuration: number }) {
   return (
-    <IconBtn onClick={() => onChange(next[layout])} title={`Layout: ${layout}`}>
+    <div style={{
+      position: 'absolute', top: 7, right: 8, pointerEvents: 'none',
+      fontFamily: 'var(--mono)', fontSize: 10,
+      color: 'rgba(255,255,255,.55)', background: 'rgba(0,0,0,.5)',
+      padding: '2px 7px', borderRadius: 4,
+    }}>
+      {fmtTime(videoTime)} / {fmtTime(videoDuration)}
+    </div>
+  )
+}
+
+function Sep() {
+  return <div style={{ width: 1, height: 20, background: 'var(--b3)', flexShrink: 0, margin: '0 2px' }} />
+}
+
+function LayoutBtn({ layout, onChange }: { layout: string; onChange: (l: any) => void }) {
+  const next:   Record<string, string> = { 'single': 'side-by-side', 'side-by-side': 'pip', 'pip': 'single' }
+  const labels: Record<string, string> = { 'single': '▣', 'side-by-side': '⬛⬛', 'pip': '⬛◻' }
+  const titles: Record<string, string> = { 'single': 'Switch to side-by-side', 'side-by-side': 'Switch to PiP', 'pip': 'Switch to single' }
+  return (
+    <IconBtn onClick={() => onChange(next[layout])} title={titles[layout]}>
       {labels[layout]}
     </IconBtn>
   )
 }
 
-function IconBtn({ children, onClick, accent, active, title }: {
+function IconBtn({ children, onClick, accent, active, title, fill }: {
   children: React.ReactNode
   onClick?: () => void
   accent?: boolean
   active?: boolean
   title?: string
+  fill?: boolean
 }) {
   const highlighted = accent || active
   return (
@@ -398,10 +471,9 @@ function IconBtn({ children, onClick, accent, active, title }: {
         cursor: 'pointer',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: '5px 8px',
-        fontFamily: 'var(--mono)',
-        fontSize: 12,
-        transition: 'all .15s',
-        flexShrink: 0,
+        fontFamily: 'var(--mono)', fontSize: 12,
+        transition: 'all .15s', flexShrink: 0,
+        ...(fill ? { flex: '1 1 0' } : {}),
       }}
     >
       {children}

@@ -140,6 +140,7 @@ export default function LibraryView({ selectionMode = false, selectedIds = new S
                 loading={isLoading}
                 selectionMode={selectionMode}
                 onLoadSingle={() => handleLoad(primary)}
+                onLoadPeer={peer && !selectionMode ? () => handleLoad(peer) : undefined}
                 onLoadSession={hasSession && !selectionMode
                   ? () => handleLoadSession(primary.session_id!, primary.id)
                   : undefined
@@ -163,11 +164,12 @@ interface ClipRowProps {
   loading: boolean
   selectionMode: boolean
   onLoadSingle: () => void
+  onLoadPeer?: () => void
   onLoadSession?: () => void
   onSelectPeer?: () => void
 }
 
-function ClipRow({ primary, peer, selected, loading, selectionMode, onLoadSingle, onLoadSession, onSelectPeer }: ClipRowProps) {
+function ClipRow({ primary, peer, selected, loading, selectionMode, onLoadSingle, onLoadPeer, onLoadSession, onSelectPeer }: ClipRowProps) {
   const dur = primary.duration_sec ? fmtDur(primary.duration_sec) : '—'
   const spd = primary.max_speed_kmh ? `${Math.round(primary.max_speed_kmh)} km/h` : '—'
   const time = primary.recorded_at
@@ -210,22 +212,12 @@ function ClipRow({ primary, peer, selected, loading, selectionMode, onLoadSingle
         <div style={{ display: 'flex', gap: 5 }}>
           {onLoadSession ? (
             <>
-              <ActionBtn onClick={onLoadSingle} loading={loading} dim>
-                {primary.channel === 'front' ? 'Front' : 'Rear'}
-              </ActionBtn>
-              {onSelectPeer && (
-                <ActionBtn onClick={onSelectPeer ?? (() => {})} loading={false} dim>
-                  {peer?.channel === 'rear' ? 'Rear' : 'Front'}
-                </ActionBtn>
-              )}
-              <ActionBtn onClick={onLoadSession} loading={loading}>
-                Load Both
-              </ActionBtn>
+              <ActionBtn onClick={onLoadSingle} loading={loading} dim>Front</ActionBtn>
+              <ActionBtn onClick={onLoadPeer ?? (() => {})} loading={loading} dim>Rear</ActionBtn>
+              <ActionBtn onClick={onLoadSession} loading={loading}>Load Both</ActionBtn>
             </>
           ) : (
-            <ActionBtn onClick={onLoadSingle} loading={loading}>
-              Load
-            </ActionBtn>
+            <ActionBtn onClick={onLoadSingle} loading={loading}>Load</ActionBtn>
           )}
         </div>
       )}

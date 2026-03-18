@@ -7,11 +7,12 @@ GET  /api/library/{clip_id}             single clip metadata + GPX
 GET  /api/footage/{clip_id}             stream video file (Range-request capable)
 """
 
+import re
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
@@ -160,11 +161,45 @@ async def get_clip(clip_id: str):
 
 @router.get('/api/footage/{clip_id}')
 async def stream_footage(clip_id: str, request: Request):
-    """Stream MP4 video file — FastAPI FileResponse handles Range requests natively."""
+    """Stream MP4 video file with HTTP 206 Range request support for seeking."""
     with Session(get_engine()) as sess:
         clip = sess.get(Clip, clip_id)
         if not clip:
             raise HTTPException(404, 'Clip not found')
-        if not Path(clip.path).exists():
+        path = Path(clip.path)
+        if not path.exists():
             raise HTTPException(404, 'Video file not found on disk')
-    return FileResponse(clip.path, media_type='video/mp4')
+
+    file_size = path.stat().st_size
+    range_header = request.headers.get('range', '')
+
+    m = re.match(r'bytes=(\d+)-(\d*)', range_header)
+    if m:
+        start = int(m.group(1))
+        end   = int(m.group(2)) if m.group(2) else file_size - 1
+        end   = min(end, file_size - 1)
+        length = end - start + 1
+
+        def _iter():
+            with open(path, 'rb') as f:
+                f.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = f.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+
+        return StreamingResponse(
+            _iter(), status_code=206, media_type='video/mp4',
+            headers={
+                'Content-Range':  f'bytes {start}-{end}/{file_size}',
+                'Content-Length': str(length),
+                'Accept-Ranges':  'bytes',
+            },
+        )
+
+    # No Range header — send full file, but advertise range support
+    return FileResponse(path, media_type='video/mp4',
+                        headers={'Accept-Ranges': 'bytes', 'Content-Length': str(file_size)})

@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useStore, SessionClip } from '../store'
-import { fetchClip, LibraryClip } from '../api/library'
+import { fetchClip, LibraryClip, FOOTAGE_BASE } from '../api/library'
 import LibraryView from './LibraryView'
 import { parseGPX, fmtTime } from '../hooks/useGPX'
 
@@ -80,7 +80,7 @@ export default function SessionBuilder() {
           channel: clip.channel,
           trimStart,
           trimEnd,
-          videoUrl: `/api/footage/${clip.id}`,
+          videoUrl: `${FOOTAGE_BASE}/api/footage/${clip.id}`,
           gpxPoints,
           videoOffset: 0, // computed by buildMultiSession
           color: '',       // assigned by buildMultiSession

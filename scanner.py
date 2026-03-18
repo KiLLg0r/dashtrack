@@ -19,8 +19,8 @@ from extractor import extract_points, points_to_gpx
 
 logger = logging.getLogger(__name__)
 
-FOOTAGE_DIR = Path(os.getenv('FOOTAGE_DIR', '/footage'))
-GPX_CACHE_DIR = Path(os.getenv('DATA_DIR', '/data')) / 'gpx_cache'
+FOOTAGE_DIR = Path(os.getenv('FOOTAGE_DIR', '/dashtrack/footage'))
+GPX_CACHE_DIR = Path(os.getenv('GPX_DIR', '/dashtrack/gpx'))
 
 
 def parse_viofo_filename(filename: str) -> dict:
