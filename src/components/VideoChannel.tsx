@@ -6,6 +6,7 @@ interface Props {
   isPrimary: boolean
   label?: string
   fillHeight?: boolean
+  aspectRatio?: string
   containerStyle?: React.CSSProperties
   onTimeUpdate?: React.ReactEventHandler<HTMLVideoElement>
   onLoadedMetadata?: React.ReactEventHandler<HTMLVideoElement>
@@ -17,12 +18,13 @@ interface Props {
 const VideoChannel = forwardRef<HTMLVideoElement, Props>(({
   videoUrl, channelId, isPrimary, label,
   fillHeight = false,
+  aspectRatio = '16/9',
   containerStyle,
   onTimeUpdate, onLoadedMetadata, onPlay, onPause, onEnded,
 }, ref) => {
   const videoStyle: React.CSSProperties = fillHeight
     ? { width: '100%', height: '100%', objectFit: 'contain', display: 'block', background: '#000' }
-    : { width: '100%', display: 'block', aspectRatio: '16/9', background: '#000' }
+    : { width: '100%', display: 'block', aspectRatio, background: '#000' }
 
   return (
     <div style={{

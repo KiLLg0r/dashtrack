@@ -28,6 +28,7 @@ export default function MultiVideoPlayer() {
   const intendedSrcs = useRef<Map<HTMLVideoElement, string>>(new Map())
   const [volInput, setVolInput] = useState(String(Math.round(volume * 100)))
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [videoAspectRatio, setVideoAspectRatio] = useState('16/9')
 
   // ── Channel/source helpers ─────────────────────────────────────────────────
 
@@ -274,10 +275,15 @@ export default function MultiVideoPlayer() {
     channelId: ch.id,
     isPrimary: ch.id === primaryChannelId || i === 0,
     label: hasBothChannels ? ch.label : undefined,
+    aspectRatio: videoAspectRatio,
     onTimeUpdate: handleTimeUpdate,
     onLoadedMetadata: (e: React.SyntheticEvent<HTMLVideoElement>) => {
-      if (ch.id === primaryChannelId || i === 0)
-        setVideoDuration((e.currentTarget as HTMLVideoElement).duration)
+      if (ch.id === primaryChannelId || i === 0) {
+        const vid = e.currentTarget as HTMLVideoElement
+        setVideoDuration(vid.duration)
+        if (vid.videoWidth && vid.videoHeight)
+          setVideoAspectRatio(`${vid.videoWidth}/${vid.videoHeight}`)
+      }
     },
     onPlay:  () => { if (ch.id === primaryChannelId || i === 0) setPlaying(true)  },
     onPause: () => { if (ch.id === primaryChannelId || i === 0) setPlaying(false) },
@@ -311,7 +317,7 @@ export default function MultiVideoPlayer() {
       minHeight: fillHeight ? 0 : undefined,
       background: '#000',
       position: 'relative',
-      ...(!fillHeight && isPip ? { aspectRatio: '16/9' } : {}),
+      ...(!fillHeight && isPip ? { aspectRatio: videoAspectRatio } : {}),
     }}>
       {allChannels.map((ch, i) => (
         <VideoChannel
