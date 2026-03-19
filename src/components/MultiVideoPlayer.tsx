@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   MdPlayArrow, MdPause, MdReplay10, MdForward10,
   MdVolumeUp, MdVolumeDown, MdVolumeOff,
-  MdFullscreen, MdFullscreenExit,
+  MdFullscreen, MdFullscreenExit, MdSwapHoriz,
+  MdOutlinePictureInPictureAlt, MdOutlineViewStream,
 } from 'react-icons/md'
 import { useStore } from '../store'
 import { fmtTime } from '../hooks/useGPX'
@@ -10,7 +11,7 @@ import VideoChannel from './VideoChannel'
 
 export default function MultiVideoPlayer() {
   const {
-    channels, primaryChannelId, videoLayout, setVideoLayout,
+    channels, primaryChannelId, setPrimaryChannelId, videoLayout, setVideoLayout,
     channelFilter, setChannelFilter,
     videoUrl, videoTime, playing, playbackRate, volume, muted, videoDuration, swapped,
     setActiveClipIndex,
@@ -288,7 +289,8 @@ export default function MultiVideoPlayer() {
   const channelContainerStyle = (ch: typeof allChannels[0], i: number): React.CSSProperties => {
     const visible = channelFilter === 'all' || ch.id === channelFilter || ch.id === 'upload'
     if (!visible) return { display: 'none' }
-    const isPrimaryChannel = ch.id === primaryChannelId || i === 0
+    // isPip is only true with 2+ channels so primaryChannelId always matches one — no i===0 fallback needed
+    const isPrimaryChannel = isPip ? ch.id === primaryChannelId : (ch.id === primaryChannelId || i === 0)
     if (isPip) {
       return isPrimaryChannel
         ? { position: 'absolute', inset: 0, flex: 'none' }
@@ -415,6 +417,18 @@ export default function MultiVideoPlayer() {
     <LayoutBtn layout={videoLayout} onChange={setVideoLayout} />
   )
 
+  const pipSwapBtn = !isFullscreen && isPip && (
+    <IconBtn
+      onClick={() => {
+        const other = allChannels.find(c => c.id !== primaryChannelId)
+        if (other) setPrimaryChannelId(other.id)
+      }}
+      title="Swap PiP cameras"
+    >
+      <MdSwapHoriz size={18} />
+    </IconBtn>
+  )
+
   const fullscreenBtn = (
     <IconBtn onClick={toggleFullscreen} title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
       {isFullscreen ? <MdFullscreenExit size={20} /> : <MdFullscreen size={20} />}
@@ -441,6 +455,7 @@ export default function MultiVideoPlayer() {
       {volumeGroup}
       {channelFilterBtns && <><Sep />{channelFilterBtns}</>}
       {layoutBtn && <><Sep />{layoutBtn}</>}
+      {pipSwapBtn && <><Sep />{pipSwapBtn}</>}
       <Sep />
       {fullscreenBtn}
     </div>
@@ -468,6 +483,7 @@ export default function MultiVideoPlayer() {
         {volumeGroup}
         {channelFilterBtns && <><Sep />{channelFilterBtns}</>}
         {layoutBtn && <><Sep />{layoutBtn}</>}
+        {pipSwapBtn && <><Sep />{pipSwapBtn}</>}
       </div>
     </>
   )
@@ -519,12 +535,16 @@ function Sep() {
 }
 
 function LayoutBtn({ layout, onChange }: { layout: string; onChange: (l: any) => void }) {
-  const next:   Record<string, string> = { 'single': 'side-by-side', 'side-by-side': 'pip', 'pip': 'single' }
-  const labels: Record<string, string> = { 'single': '▣', 'side-by-side': '⬛⬛', 'pip': '⬛◻' }
-  const titles: Record<string, string> = { 'single': 'Switch to side-by-side', 'side-by-side': 'Switch to PiP', 'pip': 'Switch to single' }
+  const next:   Record<string, string>          = { 'single': 'side-by-side', 'side-by-side': 'pip', 'pip': 'single' }
+  const titles: Record<string, string>          = { 'single': 'Switch to side-by-side', 'side-by-side': 'Switch to PiP', 'pip': 'Switch to single' }
+  const icons:  Record<string, React.ReactNode> = {
+    'single':       <MdOutlineViewStream size={18} />,
+    'side-by-side': <MdOutlineViewStream size={18} style={{ transform: 'rotate(90deg)' }} />,
+    'pip':          <MdOutlinePictureInPictureAlt size={18} />,
+  }
   return (
     <IconBtn onClick={() => onChange(next[layout])} title={titles[layout]}>
-      {labels[layout]}
+      {icons[layout]}
     </IconBtn>
   )
 }

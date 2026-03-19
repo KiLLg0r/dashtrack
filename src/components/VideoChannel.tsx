@@ -48,7 +48,7 @@ const VideoChannel = forwardRef<HTMLVideoElement, Props>(({
         <div style={{
           position: 'absolute', top: 6, left: 8, pointerEvents: 'none',
           fontFamily: 'var(--mono)', fontSize: 9, fontWeight: 700,
-          color: isPrimary ? 'var(--acc)' : '#4da6ff',
+          color: channelId === 'front' ? 'var(--acc)' : channelId === 'rear' ? '#4da6ff' : 'var(--txt3)',
           background: 'rgba(0,0,0,.7)', padding: '2px 6px', borderRadius: 3,
           letterSpacing: '.08em',
         }}>
