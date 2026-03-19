@@ -9,7 +9,6 @@ GET  /api/footage/{clip_id}             stream video file (Range-request capable
 
 import re
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -23,31 +22,33 @@ router = APIRouter()
 
 # ── Response models ───────────────────────────────────────────────────────────
 
+
 class ClipResponse(BaseModel):
     id: str
     filename: str
     channel: str
-    session_id: Optional[str]
-    recorded_at: Optional[str]
-    duration_sec: Optional[float]
+    session_id: str | None
+    recorded_at: str | None
+    duration_sec: float | None
     size_bytes: int
-    lat_min: Optional[float]
-    lat_max: Optional[float]
-    lon_min: Optional[float]
-    lon_max: Optional[float]
-    max_speed_kmh: Optional[float]
-    point_count: Optional[int]
+    lat_min: float | None
+    lat_max: float | None
+    lon_min: float | None
+    lon_max: float | None
+    max_speed_kmh: float | None
+    point_count: int | None
     status: str
-    peer_clip_id: Optional[str] = None
+    peer_clip_id: str | None = None
 
 
 class ClipDetailResponse(ClipResponse):
-    gpx: Optional[str] = None
+    gpx: str | None = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _to_response(clip: Clip, peer_id: Optional[str] = None) -> ClipResponse:
+
+def _to_response(clip: Clip, peer_id: str | None = None) -> ClipResponse:
     return ClipResponse(
         id=clip.id,
         filename=clip.filename,
@@ -67,24 +68,24 @@ def _to_response(clip: Clip, peer_id: Optional[str] = None) -> ClipResponse:
     )
 
 
-def _to_detail(clip: Clip, peer_id: Optional[str] = None) -> ClipDetailResponse:
+def _to_detail(clip: Clip, peer_id: str | None = None) -> ClipDetailResponse:
     gpx = None
     if clip.gpx_path:
         p = Path(clip.gpx_path)
         if p.exists():
-            gpx = p.read_text(encoding='utf-8')
+            gpx = p.read_text(encoding="utf-8")
     base = _to_response(clip, peer_id)
     return ClipDetailResponse(**base.model_dump(), gpx=gpx)
 
 
-def _peer_id(clip: Clip, sess: Session) -> Optional[str]:
+def _peer_id(clip: Clip, sess: Session) -> str | None:
     if not clip.session_id:
         return None
     peers = sess.exec(
         select(Clip).where(
             Clip.session_id == clip.session_id,
             Clip.id != clip.id,
-            Clip.status == 'indexed',
+            Clip.status == "indexed",
         )
     ).all()
     return peers[0].id if peers else None
@@ -92,15 +93,17 @@ def _peer_id(clip: Clip, sess: Session) -> Optional[str]:
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
-@router.get('/api/library', response_model=list[ClipResponse])
-async def list_clips(date: Optional[str] = None, status: str = 'indexed'):
+
+@router.get("/api/library", response_model=list[ClipResponse])
+async def list_clips(date: str | None = None, status: str = "indexed"):
     """List all indexed clips ordered by recorded_at DESC."""
     with Session(get_engine()) as sess:
         stmt = select(Clip).where(Clip.status == status)
         if date:
             from datetime import datetime as dt
+
             try:
-                day = dt.strptime(date, '%Y-%m-%d')
+                day = dt.strptime(date, "%Y-%m-%d")
                 stmt = stmt.where(
                     Clip.recorded_at >= day.replace(hour=0, minute=0, second=0),
                     Clip.recorded_at < day.replace(hour=23, minute=59, second=59),
@@ -126,62 +129,59 @@ async def list_clips(date: Optional[str] = None, status: str = 'indexed'):
     return results
 
 
-@router.get('/api/library/session/{session_id}', response_model=list[ClipDetailResponse])
+@router.get("/api/library/session/{session_id}", response_model=list[ClipDetailResponse])
 async def get_session_clips(session_id: str):
     """Return all clips in a session (front + rear) with full GPX."""
     with Session(get_engine()) as sess:
         clips = sess.exec(
             select(Clip).where(
                 Clip.session_id == session_id,
-                Clip.status == 'indexed',
+                Clip.status == "indexed",
             )
         ).all()
         if not clips:
-            raise HTTPException(404, f'Session {session_id} not found')
+            raise HTTPException(404, f"Session {session_id} not found")
 
         # Sort: front first, rear second
-        clips = sorted(clips, key=lambda c: (0 if c.channel == 'front' else 1))
-        peer_map = (
-            {clips[0].id: clips[1].id, clips[1].id: clips[0].id}
-            if len(clips) == 2 else {}
-        )
+        clips = sorted(clips, key=lambda c: (0 if c.channel == "front" else 1))
+        peer_map = {clips[0].id: clips[1].id, clips[1].id: clips[0].id} if len(clips) == 2 else {}
         return [_to_detail(c, peer_map.get(c.id)) for c in clips]
 
 
-@router.get('/api/library/{clip_id}', response_model=ClipDetailResponse)
+@router.get("/api/library/{clip_id}", response_model=ClipDetailResponse)
 async def get_clip(clip_id: str):
     """Return a single clip's metadata and GPX."""
     with Session(get_engine()) as sess:
         clip = sess.get(Clip, clip_id)
         if not clip:
-            raise HTTPException(404, 'Clip not found')
+            raise HTTPException(404, "Clip not found")
         peer_id = _peer_id(clip, sess)
         return _to_detail(clip, peer_id)
 
 
-@router.get('/api/footage/{clip_id}')
+@router.get("/api/footage/{clip_id}")
 async def stream_footage(clip_id: str, request: Request):
     """Stream MP4 video file with HTTP 206 Range request support for seeking."""
     with Session(get_engine()) as sess:
         clip = sess.get(Clip, clip_id)
         if not clip:
-            raise HTTPException(404, 'Clip not found')
+            raise HTTPException(404, "Clip not found")
         path = Path(clip.path)
         if not path.exists():
-            raise HTTPException(404, 'Video file not found on disk')
+            raise HTTPException(404, "Video file not found on disk")
 
     file_size = path.stat().st_size
-    range_header = request.headers.get('range', '')
+    range_header = request.headers.get("range", "")
 
-    m = re.match(r'bytes=(\d+)-(\d*)', range_header)
+    m = re.match(r"bytes=(\d+)-(\d*)", range_header)
     if m:
         start = int(m.group(1))
-        end   = int(m.group(2)) if m.group(2) else file_size - 1
-        end   = min(end, file_size - 1)
+        end = int(m.group(2)) if m.group(2) else file_size - 1
+        end = min(end, file_size - 1)
         length = end - start + 1
 
         def _iter():
-            with open(path, 'rb') as f:
+            with open(path, "rb") as f:
                 f.seek(start)
                 remaining = length
                 while remaining > 0:
@@ -192,14 +192,19 @@ async def stream_footage(clip_id: str, request: Request):
                     yield chunk
 
         return StreamingResponse(
-            _iter(), status_code=206, media_type='video/mp4',
+            _iter(),
+            status_code=206,
+            media_type="video/mp4",
             headers={
-                'Content-Range':  f'bytes {start}-{end}/{file_size}',
-                'Content-Length': str(length),
-                'Accept-Ranges':  'bytes',
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Content-Length": str(length),
+                "Accept-Ranges": "bytes",
             },
         )
 
     # No Range header — send full file, but advertise range support
-    return FileResponse(path, media_type='video/mp4',
-                        headers={'Accept-Ranges': 'bytes', 'Content-Length': str(file_size)})
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        headers={"Accept-Ranges": "bytes", "Content-Length": str(file_size)},
+    )

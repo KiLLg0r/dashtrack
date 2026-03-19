@@ -1,0 +1,41 @@
+repos:
+  # ── General file hygiene ──────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+        exclude: tsconfig\.json  # tsconfig allows comments
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+
+  # ── Python — ruff (lint + format) ────────────────────────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  # ── TypeScript / React ────────────────────────────────────────────────────
+  - repo: local
+    hooks:
+      - id: typescript
+        name: TypeScript type check
+        language: system
+        entry: npx tsc --noEmit
+        pass_filenames: false
+        files: \.(ts|tsx)$
+        types: [file]
+
+      - id: eslint
+        name: ESLint
+        language: system
+        entry: npx eslint
+        files: src/.*\.(ts|tsx)$
+        types: [file]

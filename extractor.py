@@ -22,12 +22,10 @@ one block per second. Structure (confirmed via binary inspection):
 """
 
 import struct
-import os
+from collections.abc import Generator
 from dataclasses import dataclass
-from typing import Generator
 
-
-MAGIC = b'freeGPS '
+MAGIC = b"freeGPS "
 OFFSETS_TO_TRY = (32, 28, 30, 34, 36)
 
 
@@ -45,21 +43,21 @@ def _nmea_to_decimal(val: float, hemi: str) -> float:
     deg = int(val) // 100
     mins = val - deg * 100
     dec = deg + mins / 60.0
-    return -dec if hemi in ('S', 'W') else dec
+    return -dec if hemi in ("S", "W") else dec
 
 
 def _parse_block(data: bytes, offset: int) -> GPSPoint | None:
     try:
         active = chr(data[offset])
-        ns     = chr(data[offset + 1])
-        ew     = chr(data[offset + 2])
+        ns = chr(data[offset + 1])
+        ew = chr(data[offset + 2])
 
-        if active not in ('A', 'V') or ns not in ('N', 'S') or ew not in ('E', 'W'):
+        if active not in ("A", "V") or ns not in ("N", "S") or ew not in ("E", "W"):
             return None
-        if active == 'V':
+        if active == "V":
             return None  # no GPS fix
 
-        lat_nmea, lon_nmea, speed_kn, bearing = struct.unpack_from('<ffff', data, offset + 4)
+        lat_nmea, lon_nmea, speed_kn, bearing = struct.unpack_from("<ffff", data, offset + 4)
 
         if not (0 <= lat_nmea <= 9000) or not (0 <= lon_nmea <= 18000):
             return None
@@ -69,7 +67,7 @@ def _parse_block(data: bytes, offset: int) -> GPSPoint | None:
 
         alt = None
         if offset + 20 <= len(data) - 4:
-            alt_raw = struct.unpack_from('<f', data, offset + 20)[0]
+            alt_raw = struct.unpack_from("<f", data, offset + 20)[0]
             if -500 <= alt_raw <= 9000:
                 alt = round(alt_raw, 1)
 
@@ -87,9 +85,7 @@ def _parse_block(data: bytes, offset: int) -> GPSPoint | None:
 
 def extract_points(path: str) -> Generator[GPSPoint, None, None]:
     """Scan MP4 file for freeGPS blocks and yield GPSPoint per second."""
-    file_size = os.path.getsize(path)
-
-    with open(path, 'rb') as f:
+    with open(path, "rb") as f:
         content = f.read()
 
     pos = 0
@@ -101,7 +97,7 @@ def extract_points(path: str) -> Generator[GPSPoint, None, None]:
             break
 
         block_start = idx + len(MAGIC)
-        block = content[block_start: block_start + 128]
+        block = content[block_start : block_start + 128]
 
         if len(block) < 40:
             pos = idx + 8
@@ -121,31 +117,31 @@ def extract_points(path: str) -> Generator[GPSPoint, None, None]:
         pos = idx + 8
 
 
-def points_to_gpx(points: list[GPSPoint], source_name: str = 'dashcam') -> str:
+def points_to_gpx(points: list[GPSPoint], source_name: str = "dashcam") -> str:
     """Convert list of GPSPoints to a GPX XML string."""
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<gpx version="1.1" creator="DashTrack"',
         '  xmlns="http://www.topografix.com/GPX/1/1">',
-        '  <metadata>',
-        f'    <n>DashTrack GPS route</n>',
-        f'    <desc>Extracted from {source_name}</desc>',
-        '  </metadata>',
-        '  <trk>',
-        f'    <n>{source_name}</n>',
-        '    <trkseg>',
+        "  <metadata>",
+        "    <n>DashTrack GPS route</n>",
+        f"    <desc>Extracted from {source_name}</desc>",
+        "  </metadata>",
+        "  <trk>",
+        f"    <n>{source_name}</n>",
+        "    <trkseg>",
     ]
 
     for p in points:
         lines.append(f'      <trkpt lat="{p.lat:.7f}" lon="{p.lon:.7f}">')
         if p.alt is not None:
-            lines.append(f'        <ele>{p.alt}</ele>')
-        lines.append(f'        <speed>{round(p.speed_kmh / 3.6, 3)}</speed>')
-        lines.append( '        <extensions>')
-        lines.append(f'          <video_sec>{p.video_sec}</video_sec>')
-        lines.append(f'          <bearing>{p.bearing}</bearing>')
-        lines.append( '        </extensions>')
-        lines.append( '      </trkpt>')
+            lines.append(f"        <ele>{p.alt}</ele>")
+        lines.append(f"        <speed>{round(p.speed_kmh / 3.6, 3)}</speed>")
+        lines.append("        <extensions>")
+        lines.append(f"          <video_sec>{p.video_sec}</video_sec>")
+        lines.append(f"          <bearing>{p.bearing}</bearing>")
+        lines.append("        </extensions>")
+        lines.append("      </trkpt>")
 
-    lines += ['    </trkseg>', '  </trk>', '</gpx>']
-    return '\n'.join(lines)
+    lines += ["    </trkseg>", "  </trk>", "</gpx>"]
+    return "\n".join(lines)

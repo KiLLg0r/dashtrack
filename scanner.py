@@ -19,8 +19,8 @@ from extractor import extract_points, points_to_gpx
 
 logger = logging.getLogger(__name__)
 
-FOOTAGE_DIR = Path(os.getenv('FOOTAGE_DIR', '/dashtrack/footage'))
-GPX_CACHE_DIR = Path(os.getenv('GPX_DIR', '/dashtrack/gpx'))
+FOOTAGE_DIR = Path(os.getenv("FOOTAGE_DIR", "/dashtrack/footage"))
+GPX_CACHE_DIR = Path(os.getenv("GPX_DIR", "/dashtrack/gpx"))
 
 
 def parse_viofo_filename(filename: str) -> dict:
@@ -28,18 +28,18 @@ def parse_viofo_filename(filename: str) -> dict:
     Parse Viofo filename: 2026_0314_114143_025729F.MP4
     Returns dict with session_id, recorded_at, channel.
     """
-    m = re.match(r'(\d{4}_\d{4}_\d{6})_\d+([FR])\.MP4', filename, re.IGNORECASE)
+    m = re.match(r"(\d{4}_\d{4}_\d{6})_\d+([FR])\.MP4", filename, re.IGNORECASE)
     if m:
         try:
-            recorded_at = datetime.strptime(m.group(1), '%Y_%m%d_%H%M%S')
+            recorded_at = datetime.strptime(m.group(1), "%Y_%m%d_%H%M%S")
         except ValueError:
             recorded_at = None
         return {
-            'session_id': m.group(1),
-            'recorded_at': recorded_at,
-            'channel': 'front' if m.group(2).upper() == 'F' else 'rear',
+            "session_id": m.group(1),
+            "recorded_at": recorded_at,
+            "channel": "front" if m.group(2).upper() == "F" else "rear",
         }
-    return {'session_id': None, 'recorded_at': None, 'channel': 'unknown'}
+    return {"session_id": None, "recorded_at": None, "channel": "unknown"}
 
 
 async def index_file(path: Path) -> None:
@@ -49,7 +49,7 @@ async def index_file(path: Path) -> None:
 
     with Session(get_engine()) as sess:
         existing = sess.get(Clip, cid)
-        if existing and existing.status == 'indexed':
+        if existing and existing.status == "indexed":
             return
 
     meta = parse_viofo_filename(path.name)
@@ -57,11 +57,11 @@ async def index_file(path: Path) -> None:
         id=cid,
         path=str(path),
         filename=path.name,
-        channel=meta['channel'],
-        session_id=meta['session_id'],
-        recorded_at=meta['recorded_at'],
+        channel=meta["channel"],
+        session_id=meta["session_id"],
+        recorded_at=meta["recorded_at"],
         size_bytes=path.stat().st_size,
-        status='pending',
+        status="pending",
     )
 
     try:
@@ -69,18 +69,18 @@ async def index_file(path: Path) -> None:
         points = await loop.run_in_executor(None, lambda: list(extract_points(str(path))))
 
         if not points:
-            clip.status = 'error'
-            clip.error_msg = 'No GPS data found'
+            clip.status = "error"
+            clip.error_msg = "No GPS data found"
         else:
             gpx_str = points_to_gpx(points, source_name=path.name)
-            gpx_path = GPX_CACHE_DIR / f'{cid}.gpx'
-            gpx_path.write_text(gpx_str, encoding='utf-8')
+            gpx_path = GPX_CACHE_DIR / f"{cid}.gpx"
+            gpx_path.write_text(gpx_str, encoding="utf-8")
 
             lats = [p.lat for p in points]
             lons = [p.lon for p in points]
             speeds = [p.speed_kmh for p in points if p.speed_kmh > 0]
 
-            clip.status = 'indexed'
+            clip.status = "indexed"
             clip.gpx_path = str(gpx_path)
             clip.point_count = len(points)
             clip.duration_sec = points[-1].video_sec
@@ -92,24 +92,24 @@ async def index_file(path: Path) -> None:
             clip.indexed_at = datetime.utcnow()
 
     except Exception as e:
-        logger.error('Failed to index %s: %s', path, e)
-        clip.status = 'error'
+        logger.error("Failed to index %s: %s", path, e)
+        clip.status = "error"
         clip.error_msg = str(e)
 
     with Session(get_engine()) as sess:
         sess.merge(clip)
         sess.commit()
 
-    logger.info('Indexed %s → %s (%s pts)', path.name, clip.status, clip.point_count)
+    logger.info("Indexed %s → %s (%s pts)", path.name, clip.status, clip.point_count)
 
 
 async def scan_footage_dir() -> None:
     """Scan FOOTAGE_DIR for all MP4s and index any not yet indexed."""
     if not FOOTAGE_DIR.exists():
-        logger.warning('Footage dir %s does not exist', FOOTAGE_DIR)
+        logger.warning("Footage dir %s does not exist", FOOTAGE_DIR)
         return
 
-    mp4_files = list(FOOTAGE_DIR.rglob('*.MP4')) + list(FOOTAGE_DIR.rglob('*.mp4'))
+    mp4_files = list(FOOTAGE_DIR.rglob("*.MP4")) + list(FOOTAGE_DIR.rglob("*.mp4"))
     # Deduplicate (case-insensitive filesystems may double-count)
     seen: set[str] = set()
     unique_files = []
@@ -119,15 +119,13 @@ async def scan_footage_dir() -> None:
             seen.add(k)
             unique_files.append(f)
 
-    logger.info('Found %d MP4 files in %s', len(unique_files), FOOTAGE_DIR)
+    logger.info("Found %d MP4 files in %s", len(unique_files), FOOTAGE_DIR)
 
     with Session(get_engine()) as sess:
-        indexed_ids = set(
-            sess.exec(select(Clip.id).where(Clip.status == 'indexed')).all()
-        )
+        indexed_ids = set(sess.exec(select(Clip.id).where(Clip.status == "indexed")).all())
 
     to_index = [f for f in unique_files if clip_id(str(f)) not in indexed_ids]
-    logger.info('Indexing %d new files', len(to_index))
+    logger.info("Indexing %d new files", len(to_index))
 
     for path in to_index:
         await index_file(path)
@@ -136,17 +134,18 @@ async def scan_footage_dir() -> None:
 async def watch_footage_dir() -> None:
     """Watch FOOTAGE_DIR for new/modified MP4 files and index them."""
     if not FOOTAGE_DIR.exists():
-        logger.warning('Footage dir %s does not exist, watcher not started', FOOTAGE_DIR)
+        logger.warning("Footage dir %s does not exist, watcher not started", FOOTAGE_DIR)
         return
 
     try:
-        from watchfiles import awatch, Change
-        logger.info('Watching %s for new footage', FOOTAGE_DIR)
+        from watchfiles import Change, awatch
+
+        logger.info("Watching %s for new footage", FOOTAGE_DIR)
         async for changes in awatch(str(FOOTAGE_DIR)):
             for change_type, path_str in changes:
                 path = Path(path_str)
-                if path.suffix.upper() == '.MP4' and change_type in (Change.added, Change.modified):
-                    logger.info('Detected new/modified file: %s', path.name)
+                if path.suffix.upper() == ".MP4" and change_type in (Change.added, Change.modified):
+                    logger.info("Detected new/modified file: %s", path.name)
                     await index_file(path)
     except Exception as e:
-        logger.error('File watcher error: %s', e)
+        logger.error("File watcher error: %s", e)
