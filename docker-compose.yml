@@ -1,7 +1,10 @@
 services:
   dashtrack:
     container_name: dashtrack
-    build: .
+    build:
+      context: .
+      args:
+        - VITE_MAPBOX_TOKEN=${VITE_MAPBOX_TOKEN}
     restart: unless-stopped
     ports:
       - "8080:8000"
