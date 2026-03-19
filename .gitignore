@@ -8,8 +8,6 @@ dist/
 .claude/
 .qodo/
 .venv/
-CLAUDE.md
-context.md
 __pycache__/
 *.pyc
 .python-version
