@@ -148,7 +148,7 @@ export default function MapView() {
           if (dist > GAP_THRESHOLD_M || timeDiff > GAP_THRESHOLD_S) {
             const el = document.createElement('div')
             el.title = 'Gap — click to jump to next segment'
-            el.innerHTML = `<div style="width:20px;height:20px;border-radius:50%;background:#09090c;border:2px solid ${b.color};display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:11px;font-weight:700;color:${b.color}">▶</div>`
+            el.innerHTML = `<div style="width:20px;height:20px;border-radius:50%;background:#09090c;border:2px solid ${b.color};display:flex;align-items:center;justify-content:center;cursor:pointer;"><svg width="9" height="10" viewBox="0 0 9 10" fill="${b.color}"><polygon points="1,1 8,5 1,9"/></svg></div>`
             const gapIdx = ms.clipPointOffsets[i + 1]
             el.addEventListener('click', () => seekToIdx(gapIdx))
             const mk = new mapboxgl.Marker({ element: el, anchor: 'center' })

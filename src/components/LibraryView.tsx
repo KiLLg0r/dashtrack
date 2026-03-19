@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { MdErrorOutline } from 'react-icons/md'
 import { useStore } from '../store'
 import { fetchLibrary, fetchClip, fetchSession, LibraryClip } from '../api/library'
 
@@ -96,7 +97,7 @@ export default function LibraryView({ selectionMode = false, selectedIds = new S
 
   if (error) return (
     <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 11 }}>✗ {error}</div>
+      <div style={{ color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}><MdErrorOutline size={14} style={{ flexShrink: 0 }} /> {error}</div>
       <div style={{ color: 'var(--txt3)', fontFamily: 'var(--mono)', fontSize: 10, lineHeight: 1.6 }}>
         Mount a footage volume:<br />
         <code>-v /your/footage:/footage</code>

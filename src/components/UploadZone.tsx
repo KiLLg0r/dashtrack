@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
+import { MdMovie, MdCheck, MdErrorOutline } from 'react-icons/md'
 import { useStore } from '../store'
 import { parseGPX } from '../hooks/useGPX'
 
@@ -89,7 +90,7 @@ export default function UploadZone() {
             transition: 'all .15s',
           }}
         >
-          <div style={{ fontSize: 28, marginBottom: 8, opacity: 0.4 }}>🎬</div>
+          <MdMovie size={36} style={{ marginBottom: 8, opacity: 0.4, color: 'var(--txt2)', display: 'block', margin: '0 auto 8px' }} />
           <div style={{ fontSize: 13, color: 'var(--txt2)', marginBottom: 4 }}>Drop dashcam video here</div>
           <div style={{ fontSize: 11, color: 'var(--txt3)', fontFamily: 'var(--mono)' }}>
             MP4 · MOV · AVI — GPS extracted automatically
@@ -100,8 +101,9 @@ export default function UploadZone() {
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--txt2)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              🎬 {videoFile.name}
+            <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--txt2)', flex: 1, overflow: 'hidden', display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+              <MdMovie size={14} style={{ color: 'var(--txt3)', flexShrink: 0 }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{videoFile.name}</span>
             </span>
             <button onClick={() => fileRef.current?.click()}
               style={{ fontSize: 10, fontFamily: 'var(--mono)', padding: '3px 8px', background: 'var(--s3)', border: '1px solid var(--b2)', borderRadius: 6, color: 'var(--txt2)', cursor: 'pointer' }}>
@@ -124,8 +126,8 @@ export default function UploadZone() {
               </div>
             </div>
           )}
-          {done  && <div style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--grn)' }}>✓ GPS extracted — {extractionProgress} points</div>}
-          {error && <div style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--red)', wordBreak: 'break-word' }}>✗ {useStore.getState().extractionError}</div>}
+          {done  && <div style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--grn)', display: 'flex', alignItems: 'center', gap: 4 }}><MdCheck size={14} style={{ flexShrink: 0 }} /> GPS extracted — {extractionProgress} points</div>}
+          {error && <div style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--red)', display: 'flex', alignItems: 'flex-start', gap: 4 }}><MdErrorOutline size={14} style={{ flexShrink: 0, marginTop: 1 }} /> {useStore.getState().extractionError}</div>}
         </div>
       )}
 

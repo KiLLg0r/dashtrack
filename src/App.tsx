@@ -1,5 +1,6 @@
 import { useLayoutEffect, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { MdAdd, MdSwapHoriz, MdRefresh } from 'react-icons/md'
 import MapView from './components/MapView'
 import MultiVideoPlayer from './components/MultiVideoPlayer'
 import Timeline from './components/Timeline'
@@ -95,9 +96,9 @@ export default function App() {
           {!welcomeMode && (
             <>
               <HeaderBtn onClick={() => openModal('library')} active={libraryOpen && libraryInitialTab === 'library'}>Library</HeaderBtn>
-              <HeaderBtn onClick={() => openModal('upload')} active={libraryOpen && libraryInitialTab === 'upload'}>+ Add video</HeaderBtn>
-              <HeaderBtn onClick={() => setSwapped(!swapped)} active={swapped}>⇄ {swapped ? 'Unswap' : 'Swap'}</HeaderBtn>
-              <HeaderBtn onClick={() => { reset(); setLibraryChecked(new Set()) }}>↺ Reset</HeaderBtn>
+              <HeaderBtn onClick={() => openModal('upload')} active={libraryOpen && libraryInitialTab === 'upload'}><MdAdd size={15} />Add video</HeaderBtn>
+              <HeaderBtn onClick={() => setSwapped(!swapped)} active={swapped}><MdSwapHoriz size={16} />{swapped ? 'Unswap' : 'Swap'}</HeaderBtn>
+              <HeaderBtn onClick={() => { reset(); setLibraryChecked(new Set()) }}><MdRefresh size={15} />Reset</HeaderBtn>
             </>
           )}
         </div>
@@ -189,6 +190,7 @@ function HeaderBtn({ children, onClick, active }: { children: React.ReactNode; o
       fontFamily: 'var(--mono)', fontSize: 11,
       color: active ? 'var(--acc)' : 'var(--txt2)',
       transition: 'all .15s', userSelect: 'none',
+      display: 'flex', alignItems: 'center', gap: 5,
     }}>
       {children}
     </div>
