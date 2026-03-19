@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { DayPicker } from 'react-day-picker'
+import type { DateRange } from 'react-day-picker'
+import 'react-day-picker/style.css'
 import { MdClose, MdExpandMore, MdCalendarMonth, MdUpload } from 'react-icons/md'
 import { useStore } from '../store'
 import type { SessionClip } from '../store'
@@ -9,6 +12,27 @@ import UploadZone from './UploadZone'
 type LoadChannel = 'front' | 'rear' | 'both'
 type ChannelFilter = 'all' | 'front' | 'rear'
 type DisplayItem = { primary: LibraryClip; peer?: LibraryClip }
+
+function buildPresets(): { label: string; range: DateRange }[] {
+  const d = (y: number, m: number, day: number) => new Date(y, m, day)
+  const now  = new Date()
+  const y    = now.getFullYear()
+  const mo   = now.getMonth()
+  const day  = now.getDate()
+  const dow  = now.getDay() // 0=Sun
+  const weekStart = day - ((dow + 6) % 7) // Mon-based
+
+  return [
+    { label: 'Today',      range: { from: d(y, mo, day),     to: d(y, mo, day) } },
+    { label: 'Yesterday',  range: { from: d(y, mo, day - 1), to: d(y, mo, day - 1) } },
+    { label: 'This week',  range: { from: d(y, mo, weekStart), to: d(y, mo, weekStart + 6) } },
+    { label: 'Last week',  range: { from: d(y, mo, weekStart - 7), to: d(y, mo, weekStart - 1) } },
+    { label: 'This month', range: { from: d(y, mo, 1), to: d(y, mo + 1, 0) } },
+    { label: 'Last month', range: { from: d(y, mo - 1, 1), to: d(y, mo, 0) } },
+    { label: 'This year',  range: { from: d(y, 0, 1), to: d(y, 11, 31) } },
+  ]
+}
+const DATE_PRESETS = buildPresets()
 
 interface Props {
   onClose: () => void
@@ -25,7 +49,9 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
   const [error, setError] = useState<string | null>(null)
   const [loadingId, setLoadingId] = useState<string | null>(null)
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>('all')
-  const [dateFilter, setDateFilter] = useState('')
+  const [dateRange, setDateRange] = useState<DateRange | undefined>()
+  const [showDatePicker, setShowDatePicker] = useState(false)
+  const datePickerRef = useRef<HTMLDivElement>(null)
   const [collapsedDates, setCollapsedDates] = useState<Set<string>>(new Set())
 
   useEffect(() => {
@@ -48,10 +74,26 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
 
   // Close on Escape
   useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const h = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (showDatePicker) { setShowDatePicker(false); return }
+        onClose()
+      }
+    }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
-  }, [onClose])
+  }, [onClose, showDatePicker])
+
+  // Close date picker on outside click
+  useEffect(() => {
+    if (!showDatePicker) return
+    const h = (e: MouseEvent) => {
+      if (datePickerRef.current && !datePickerRef.current.contains(e.target as Node))
+        setShowDatePicker(false)
+    }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [showDatePicker])
 
   // Deduplicate into pairs: primary = front, peer = rear
   const displayItems = useMemo<DisplayItem[]>(() => {
@@ -93,7 +135,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
     return displayItems
   }, [displayItems, channelFilter])
 
-  // Group by date (newest first), then apply date filter
+  // Group by date (newest first), then apply date range filter
   const grouped = useMemo(() => {
     const groups: Record<string, DisplayItem[]> = {}
     for (const item of filteredItems) {
@@ -102,18 +144,18 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
       groups[date].push(item)
     }
     let entries = Object.entries(groups).sort(([a], [b]) => b.localeCompare(a))
-    if (dateFilter) entries = entries.filter(([date]) => date === dateFilter)
+    if (dateRange?.from) {
+      const norm = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
+      const from = norm(dateRange.from)
+      const to   = norm(dateRange.to ?? dateRange.from)
+      entries = entries.filter(([date]) => {
+        if (date === 'Unknown') return false
+        const d = norm(new Date(date + 'T12:00:00'))
+        return d >= from && d <= to
+      })
+    }
     return entries
-  }, [filteredItems, dateFilter])
-
-  // Available dates for picker min/max hints
-  const availableDates = useMemo(() =>
-    displayItems
-      .map(i => i.primary.recorded_at?.slice(0, 10))
-      .filter(Boolean)
-      .sort() as string[],
-    [displayItems]
-  )
+  }, [filteredItems, dateRange])
 
   const itemKey = (item: DisplayItem) => item.primary.session_id ?? item.primary.id
 
@@ -326,35 +368,99 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
 
             <div style={{ width: 1, height: 16, background: 'var(--b3)', flexShrink: 0 }} />
 
-            {/* Date picker */}
-            <style>{`input[type="date"]::-webkit-calendar-picker-indicator{opacity:0;position:absolute;right:0;width:100%;height:100%;cursor:pointer}`}</style>
-            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-              <MdCalendarMonth
-                size={13}
-                style={{
-                  position: 'absolute', left: 7, pointerEvents: 'none', zIndex: 1,
-                  color: dateFilter ? 'var(--acc)' : 'var(--txt3)',
-                }}
-              />
-              <input
-                type="date"
-                value={dateFilter}
-                min={availableDates[0]}
-                max={availableDates[availableDates.length - 1]}
-                onChange={e => setDateFilter(e.target.value)}
+            {/* Date range picker */}
+            <div ref={datePickerRef} style={{ position: 'relative' }}>
+              <button
+                onClick={() => setShowDatePicker(p => !p)}
                 style={{
                   fontFamily: 'var(--mono)', fontSize: 10,
-                  background: dateFilter ? 'var(--acc-dim)' : 'transparent',
-                  border: `1px solid ${dateFilter ? 'rgba(245,197,66,.4)' : 'var(--b2)'}`,
-                  borderRadius: 5, color: dateFilter ? 'var(--acc)' : 'var(--txt3)',
-                  padding: '3px 6px 3px 24px', cursor: 'pointer',
-                  colorScheme: 'dark',
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  padding: '3px 8px',
+                  background: dateRange?.from ? 'var(--acc-dim)' : 'transparent',
+                  border: `1px solid ${dateRange?.from ? 'rgba(245,197,66,.4)' : 'var(--b2)'}`,
+                  borderRadius: 5,
+                  color: dateRange?.from ? 'var(--acc)' : 'var(--txt3)',
+                  cursor: 'pointer', transition: 'all .1s',
                 }}
-              />
+              >
+                <MdCalendarMonth size={13} />
+                {dateRange?.from
+                  ? dateRange.to && dateRange.to.getTime() !== dateRange.from.getTime()
+                    ? `${fmtDate(dateRange.from)} – ${fmtDate(dateRange.to)}`
+                    : fmtDate(dateRange.from)
+                  : 'Date range'}
+              </button>
+
+              {showDatePicker && (
+                <div style={{
+                  position: 'absolute', top: 'calc(100% + 6px)', left: 0,
+                  zIndex: 200,
+                  background: 'var(--s1)',
+                  border: '1px solid var(--b3)',
+                  borderRadius: 10,
+                  boxShadow: '0 8px 32px rgba(0,0,0,.6)',
+                  padding: '4px 8px 8px',
+                }}>
+                  <style>{`
+                    .dt-rdp { --rdp-accent-color:#f5c542; --rdp-accent-background-color:rgba(245,197,66,.12);
+                      --rdp-range_middle-background-color:rgba(245,197,66,.1); --rdp-range_middle-color:#f5c542;
+                      --rdp-range_start-color:#09090c; --rdp-range_end-color:#09090c;
+                      --rdp-range_start-date-background-color:#c99b10; --rdp-range_end-date-background-color:#c99b10;
+                      --rdp-day-height:34px; --rdp-day-width:34px;
+                      --rdp-day_button-height:32px; --rdp-day_button-width:32px;
+                      --rdp-day_button-border-radius:6px;
+                      --rdp-nav_button-height:1.4rem; --rdp-nav_button-width:1.4rem;
+                      --rdp-nav-height:2.2rem;
+                      color:#dde2ec; font-family:'JetBrains Mono',monospace; font-size:11px; }
+                    .dt-rdp .rdp-chevron { fill:#6e7a8a; width:14px; height:14px }
+                    .dt-rdp .rdp-month_caption { justify-content:center; font-size:11px; font-weight:600; color:#dde2ec }
+                    .dt-rdp .rdp-weekday { color:#6e7a8a; font-size:10px }
+                    .dt-rdp .rdp-day_button:hover:not(:disabled) { background:rgba(255,255,255,.06) }
+                    .dt-rdp .rdp-selected { font-size:inherit; font-weight:inherit }
+                    .dt-rdp .rdp-selected .rdp-day_button { border-color:transparent }
+                    .dt-rdp .rdp-today:not(.rdp-outside):not(.rdp-selected) .rdp-day_button { color:#f5c542 }
+                    .dt-rdp .rdp-outside { opacity:.35 }
+                  `}</style>
+                  <div style={{ display: 'flex' }}>
+                    {/* Presets */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '8px 8px 8px 4px', borderRight: '1px solid var(--b2)', minWidth: 96 }}>
+                      {DATE_PRESETS.map(({ label, range }) => {
+                        const rf = range.from!
+                        const rt = range.to ?? rf
+                        const active = dateRange?.from?.getTime() === rf.getTime() &&
+                          (dateRange?.to?.getTime() ?? rf.getTime()) === rt.getTime()
+                        return (
+                          <button
+                            key={label}
+                            onClick={() => setDateRange(active ? undefined : range)}
+                            style={{
+                              fontFamily: 'var(--mono)', fontSize: 11,
+                              padding: '4px 8px', textAlign: 'left',
+                              background: active ? 'var(--acc-dim)' : 'transparent',
+                              border: `1px solid ${active ? 'rgba(245,197,66,.4)' : 'transparent'}`,
+                              borderRadius: 5,
+                              color: active ? 'var(--acc)' : 'var(--txt3)',
+                              cursor: 'pointer', transition: 'all .1s', whiteSpace: 'nowrap',
+                            }}
+                          >{label}</button>
+                        )
+                      })}
+                    </div>
+
+                    <DayPicker
+                      className="dt-rdp"
+                      mode="range"
+                      selected={dateRange}
+                      onSelect={setDateRange}
+                      showOutsideDays
+                    />
+                  </div>
+                </div>
+              )}
             </div>
-            {dateFilter && (
+            {dateRange?.from && (
               <button
-                onClick={() => setDateFilter('')}
+                onClick={() => { setDateRange(undefined); setShowDatePicker(false) }}
                 title="Clear date filter"
                 style={{
                   background: 'transparent', border: '1px solid var(--b2)',
@@ -367,7 +473,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
             <div style={{ flex: 1 }} />
 
             {/* Showing count */}
-            {(channelFilter !== 'all' || dateFilter) && (
+            {(channelFilter !== 'all' || dateRange?.from) && (
               <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--txt3)' }}>
                 {totalVisible} shown
               </span>
@@ -693,6 +799,10 @@ function fmtDur(sec: number): string {
   const m = Math.floor((sec % 3600) / 60)
   const s = Math.floor(sec % 60)
   return h ? `${h}h ${m}m` : m ? `${m}m ${s}s` : `${s}s`
+}
+
+function fmtDate(d: Date): string {
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
 function formatDate(dateStr: string): string {
