@@ -97,7 +97,7 @@ export default function App() {
               <HeaderBtn onClick={() => openModal('library')} active={libraryOpen && libraryInitialTab === 'library'}>Library</HeaderBtn>
               <HeaderBtn onClick={() => openModal('upload')} active={libraryOpen && libraryInitialTab === 'upload'}>+ Add video</HeaderBtn>
               <HeaderBtn onClick={() => setSwapped(!swapped)} active={swapped}>⇄ {swapped ? 'Unswap' : 'Swap'}</HeaderBtn>
-              <HeaderBtn onClick={reset}>↺ Reset</HeaderBtn>
+              <HeaderBtn onClick={() => { reset(); setLibraryChecked(new Set()) }}>↺ Reset</HeaderBtn>
             </>
           )}
         </div>
