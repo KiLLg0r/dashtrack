@@ -13,26 +13,42 @@ type LoadChannel = 'front' | 'rear' | 'both'
 type ChannelFilter = 'all' | 'front' | 'rear'
 type DisplayItem = { primary: LibraryClip; peer?: LibraryClip }
 
-function buildPresets(): { label: string; range: DateRange }[] {
+/** Returns 0=Sun, 1=Mon, … 6=Sat from the browser locale (Intl.Locale weekInfo). Falls back to 1. */
+function localeWeekStartsOn(): 0 | 1 | 2 | 3 | 4 | 5 | 6 {
+  try {
+    const loc = new Intl.Locale(navigator.language)
+    // weekInfo.firstDay: 1=Mon … 7=Sun (ISO); convert to JS 0=Sun … 6=Sat
+    const firstDay: number =
+      (loc as any).weekInfo?.firstDay ?? (loc as any).getWeekInfo?.()?.firstDay ?? 1
+    return (firstDay % 7) as 0 | 1 | 2 | 3 | 4 | 5 | 6
+  } catch {
+    return 1
+  }
+}
+
+function buildPresets(weekStart0: 0 | 1 | 2 | 3 | 4 | 5 | 6): { label: string; range: DateRange }[] {
   const d = (y: number, m: number, day: number) => new Date(y, m, day)
-  const now  = new Date()
-  const y    = now.getFullYear()
-  const mo   = now.getMonth()
-  const day  = now.getDate()
-  const dow  = now.getDay() // 0=Sun
-  const weekStart = day - ((dow + 6) % 7) // Mon-based
+  const now = new Date()
+  const y   = now.getFullYear()
+  const mo  = now.getMonth()
+  const day = now.getDate()
+  const dow = now.getDay() // 0=Sun
+  // Days since the locale's week start
+  const weekStart = day - ((dow - weekStart0 + 7) % 7)
 
   return [
-    { label: 'Today',      range: { from: d(y, mo, day),     to: d(y, mo, day) } },
-    { label: 'Yesterday',  range: { from: d(y, mo, day - 1), to: d(y, mo, day - 1) } },
-    { label: 'This week',  range: { from: d(y, mo, weekStart), to: d(y, mo, weekStart + 6) } },
+    { label: 'Today',      range: { from: d(y, mo, day),          to: d(y, mo, day) } },
+    { label: 'Yesterday',  range: { from: d(y, mo, day - 1),      to: d(y, mo, day - 1) } },
+    { label: 'This week',  range: { from: d(y, mo, weekStart),     to: d(y, mo, weekStart + 6) } },
     { label: 'Last week',  range: { from: d(y, mo, weekStart - 7), to: d(y, mo, weekStart - 1) } },
-    { label: 'This month', range: { from: d(y, mo, 1), to: d(y, mo + 1, 0) } },
-    { label: 'Last month', range: { from: d(y, mo - 1, 1), to: d(y, mo, 0) } },
-    { label: 'This year',  range: { from: d(y, 0, 1), to: d(y, 11, 31) } },
+    { label: 'This month', range: { from: d(y, mo, 1),             to: d(y, mo + 1, 0) } },
+    { label: 'Last month', range: { from: d(y, mo - 1, 1),         to: d(y, mo, 0) } },
+    { label: 'This year',  range: { from: d(y, 0, 1),              to: d(y, 11, 31) } },
   ]
 }
-const DATE_PRESETS = buildPresets()
+
+const WEEK_STARTS_ON = localeWeekStartsOn()
+const DATE_PRESETS   = buildPresets(WEEK_STARTS_ON)
 
 interface Props {
   onClose: () => void
@@ -453,6 +469,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
                       selected={dateRange}
                       onSelect={setDateRange}
                       showOutsideDays
+                      weekStartsOn={WEEK_STARTS_ON}
                     />
                   </div>
                 </div>
@@ -802,7 +819,7 @@ function fmtDur(sec: number): string {
 }
 
 function fmtDate(d: Date): string {
-  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+  return d.toLocaleDateString(navigator.language, { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
 function formatDate(dateStr: string): string {
