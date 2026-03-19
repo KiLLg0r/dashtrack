@@ -127,7 +127,8 @@ export default function LibraryView({ selectionMode = false, selectedIds = new S
           </div>
 
           {items.map(({ primary, peer }) => {
-            const isSelected = selectedIds.has(primary.id) || (peer ? selectedIds.has(peer.id) : false)
+            const isPrimarySelected = selectedIds.has(primary.id)
+            const isPeerSelected = peer ? selectedIds.has(peer.id) : false
             const isLoading = loadingId === primary.id || loadingId === (primary.session_id ?? '')
             const hasSession = !!primary.session_id && !!peer
 
@@ -136,7 +137,8 @@ export default function LibraryView({ selectionMode = false, selectedIds = new S
                 key={primary.id}
                 primary={primary}
                 peer={peer}
-                selected={isSelected}
+                selected={isPrimarySelected}
+                peerSelected={isPeerSelected}
                 loading={isLoading}
                 selectionMode={selectionMode}
                 onLoadSingle={() => handleLoad(primary)}
@@ -160,7 +162,8 @@ export default function LibraryView({ selectionMode = false, selectedIds = new S
 interface ClipRowProps {
   primary: LibraryClip
   peer?: LibraryClip
-  selected: boolean
+  selected: boolean       // primary is selected
+  peerSelected?: boolean  // peer is selected
   loading: boolean
   selectionMode: boolean
   onLoadSingle: () => void
@@ -169,7 +172,7 @@ interface ClipRowProps {
   onSelectPeer?: () => void
 }
 
-function ClipRow({ primary, peer, selected, loading, selectionMode, onLoadSingle, onLoadPeer, onLoadSession, onSelectPeer }: ClipRowProps) {
+function ClipRow({ primary, peer, selected, peerSelected, loading, selectionMode, onLoadSingle, onLoadPeer, onLoadSession, onSelectPeer }: ClipRowProps) {
   const dur = primary.duration_sec ? fmtDur(primary.duration_sec) : '—'
   const spd = primary.max_speed_kmh ? `${Math.round(primary.max_speed_kmh)} km/h` : '—'
   const time = primary.recorded_at
@@ -180,7 +183,7 @@ function ClipRow({ primary, peer, selected, loading, selectionMode, onLoadSingle
     <div style={{
       padding: '7px 12px',
       borderBottom: '1px solid var(--b1)',
-      background: selected ? 'var(--acc-dim)' : 'transparent',
+      background: (selected || peerSelected) ? 'var(--acc-dim)' : 'transparent',
       transition: 'background .1s',
     }}>
       {/* Top row: time + channel badges + duration */}
@@ -224,9 +227,20 @@ function ClipRow({ primary, peer, selected, loading, selectionMode, onLoadSingle
 
       {selectionMode && (
         <div style={{ display: 'flex', gap: 5 }}>
-          <ActionBtn onClick={onLoadSingle} loading={false} active={selected}>
-            {selected ? '✓ Selected' : '+ Add to session'}
-          </ActionBtn>
+          {peer ? (
+            <>
+              <ActionBtn onClick={onLoadSingle} loading={false} active={selected}>
+                {selected ? '✓ F' : '+ F'}
+              </ActionBtn>
+              <ActionBtn onClick={() => onSelectPeer?.()} loading={false} active={!!peerSelected}>
+                {peerSelected ? '✓ R' : '+ R'}
+              </ActionBtn>
+            </>
+          ) : (
+            <ActionBtn onClick={onLoadSingle} loading={false} active={selected}>
+              {selected ? '✓ Selected' : '+ Add to session'}
+            </ActionBtn>
+          )}
         </div>
       )}
 

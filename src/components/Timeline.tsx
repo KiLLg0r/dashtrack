@@ -4,7 +4,10 @@ import { totalDistance, fmtDuration } from '../hooks/useGPX'
 
 export default function Timeline() {
   const { points, currentIdx, extractionStatus, multiSession } = useStore()
-  const activeRef = useRef<HTMLDivElement>(null)
+  const activeRef       = useRef<HTMLDivElement>(null)
+  const scrollRef       = useRef<HTMLDivElement>(null)
+  const isAutoScrolling = useRef(false)
+  const userScrolled    = useRef(false)
 
   // Build display items — flat list of waypoints with optional segment dividers
   const items = useMemo(() => {
@@ -59,11 +62,26 @@ export default function Timeline() {
     }
   }, [points, multiSession])
 
+  // Track manual scroll — suppress auto-scroll until user explicitly clicks a waypoint
   useEffect(() => {
-    activeRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    const el = scrollRef.current
+    if (!el) return
+    const onScroll = () => { if (!isAutoScrolling.current) userScrolled.current = true }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [])
+
+  useEffect(() => {
+    if (userScrolled.current) return
+    if (!activeRef.current) return
+    isAutoScrolling.current = true
+    activeRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    const id = setTimeout(() => { isAutoScrolling.current = false }, 600)
+    return () => clearTimeout(id)
   }, [currentIdx])
 
   const seekToIdx = (idx: number) => {
+    userScrolled.current = false
     window.dispatchEvent(new CustomEvent('dashtrack:seek', { detail: { idx } }))
     useStore.getState().setCurrentIdx(idx)
   }
@@ -84,7 +102,7 @@ export default function Timeline() {
       )}
 
       {/* List */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: 10 }}>
+      <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 10 }}>
         {!points.length ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12, color: 'var(--txt3)', textAlign: 'center', padding: 20 }}>
             {extractionStatus === 'extracting' || extractionStatus === 'uploading' ? (

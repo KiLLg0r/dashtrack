@@ -1,15 +1,25 @@
-import { useLayoutEffect, useEffect, useRef } from 'react'
+import { useLayoutEffect, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import MapView from './components/MapView'
 import MultiVideoPlayer from './components/MultiVideoPlayer'
 import Timeline from './components/Timeline'
 import UploadZone from './components/UploadZone'
-import LibraryView from './components/LibraryView'
-import SessionBuilder from './components/SessionBuilder'
+import LibraryModal from './components/LibraryModal'
 import { useStore } from './store'
 
 export default function App() {
-  const { swapped, setSwapped, points, appMode, setAppMode, multiSession } = useStore()
+  const { swapped, setSwapped, multiSession, points, reset } = useStore()
+  const [libraryOpen, setLibraryOpen] = useState(false)
+  const [libraryInitialTab, setLibraryInitialTab] = useState<'library' | 'upload'>('library')
+  const [libraryChecked, setLibraryChecked] = useState<Set<string>>(new Set())
+
+  const openModal = (tab: 'library' | 'upload') => {
+    setLibraryInitialTab(tab)
+    setLibraryOpen(true)
+  }
+
+  // No GPS data loaded yet — show the welcome/upload screen
+  const welcomeMode = points.length === 0
 
   // Stable imperative containers — created once, never destroyed.
   // React portals render MapView/MultiVideoPlayer into these divs permanently.
@@ -67,8 +77,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  const showSessionBuilder = appMode === 'session-builder'
-
   return (
     <>
       <div style={{ display: 'grid', gridTemplateRows: '48px 1fr', gridTemplateColumns: '1fr 400px', height: '100vh', background: 'var(--bg)' }}>
@@ -84,43 +92,76 @@ export default function App() {
               {multiSession.clips.length} segments
             </div>
           )}
-          <HeaderBtn onClick={() => setAppMode(appMode === 'library' ? 'upload' : 'library')} active={appMode === 'library'}>
-            Library
-          </HeaderBtn>
-          <HeaderBtn
-            onClick={() => setAppMode(appMode === 'session-builder' ? 'library' : 'session-builder')}
-            active={appMode === 'session-builder'}
-          >
-            + Session
-          </HeaderBtn>
-          <HeaderBtn onClick={() => setSwapped(!swapped)} active={swapped}>⇄ {swapped ? 'Unswap' : 'Swap'}</HeaderBtn>
+          {!welcomeMode && (
+            <>
+              <HeaderBtn onClick={() => openModal('library')} active={libraryOpen && libraryInitialTab === 'library'}>Library</HeaderBtn>
+              <HeaderBtn onClick={() => openModal('upload')} active={libraryOpen && libraryInitialTab === 'upload'}>+ Add video</HeaderBtn>
+              <HeaderBtn onClick={() => setSwapped(!swapped)} active={swapped}>⇄ {swapped ? 'Unswap' : 'Swap'}</HeaderBtn>
+              <HeaderBtn onClick={reset}>↺ Reset</HeaderBtn>
+            </>
+          )}
         </div>
 
-        {/* LEFT: big slot */}
+        {/* LEFT: big slot (map or video, depending on swapped) */}
         <div ref={leftSlotRef} style={{ gridColumn: 1, gridRow: 2, overflow: 'hidden', position: 'relative', display: 'flex', flexDirection: 'column' }} />
 
         {/* RIGHT SIDEBAR */}
         <div style={{ gridColumn: 2, gridRow: 2, background: 'var(--s1)', borderLeft: '1px solid var(--b2)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          {/* Small slot — Video/Map */}
           <div ref={smallSlotRef} style={{ flexShrink: 0, overflow: 'hidden', position: 'relative' }} />
-
-          {/* Panel content — switches between Upload, Library, Session Builder */}
-          {showSessionBuilder ? (
-            <SessionBuilder />
-          ) : appMode === 'library' ? (
-            <LibraryView />
-          ) : (
-            <UploadZone />
-          )}
-
           <Timeline />
         </div>
 
       </div>
 
+      {/* Welcome overlay — shown until GPS data is loaded */}
+      {welcomeMode && (
+        <div style={{
+          position: 'fixed', inset: 0, top: 48,  // below header
+          zIndex: 50,
+          background: 'var(--bg)',
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          gap: 32,
+        }}>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: '.12em', color: 'var(--acc)', fontFamily: 'var(--ui)', textTransform: 'uppercase', marginBottom: 8 }}>
+              DashTrack
+            </div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--txt3)', letterSpacing: '.04em' }}>
+              GPS route visualization for Viofo dashcams
+            </div>
+          </div>
+
+          <div style={{ width: 'min(480px, 90vw)' }}>
+            <UploadZone />
+          </div>
+
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--txt3)', textAlign: 'center', lineHeight: 1.8 }}>
+            or open{' '}
+            <span
+              onClick={() => openModal('library')}
+              style={{ color: 'var(--acc)', cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'rgba(245,197,66,.4)' }}
+            >
+              Library
+            </span>
+            {' '}to browse indexed footage
+          </div>
+        </div>
+      )}
+
       {/* Portals: always live in their stable containers, never remount */}
-      {createPortal(<MapView />,            mapBox.current!)}
-      {createPortal(<MultiVideoPlayer />,   videoBox.current!)}
+      {createPortal(<MapView />,          mapBox.current!)}
+      {createPortal(<MultiVideoPlayer />, videoBox.current!)}
+
+      {/* Library / Add video modal */}
+      {libraryOpen && (
+        <LibraryModal
+          onClose={() => setLibraryOpen(false)}
+          initialTab={libraryInitialTab}
+          checked={libraryChecked}
+          setChecked={setLibraryChecked}
+        />
+      )}
     </>
   )
 }
@@ -128,7 +169,7 @@ export default function App() {
 function HeaderMeta() {
   const { points, currentIdx, extractionStatus } = useStore()
   const p = points[currentIdx]
-  if (extractionStatus === 'uploading') return <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--txt2)' }}>uploading…</span>
+  if (extractionStatus === 'uploading')  return <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--txt2)' }}>uploading…</span>
   if (extractionStatus === 'extracting') return <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--acc)' }}>extracting GPS…</span>
   if (!p) return <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--txt3)' }}>drop a video or open library</span>
   return (

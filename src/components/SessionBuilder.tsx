@@ -60,37 +60,55 @@ export default function SessionBuilder() {
 
     try {
       const sessionClips: SessionClip[] = []
+      const clipById = new Map(selectedClips.map(c => [c.id, c]))
+      const processed = new Set<string>()
 
       for (const clip of selectedClips) {
-        let detail = clipDetails.get(clip.id)
+        if (processed.has(clip.id)) continue
+
+        // Detect F+R pair: if both channels of the same session are selected, group them
+        const peerClipEntry = clip.peer_clip_id ? clipById.get(clip.peer_clip_id) : undefined
+        let primary = clip
+        let secondary = peerClipEntry ?? null
+
+        if (secondary) {
+          // Always use front as primary
+          if (clip.channel === 'rear') {
+            primary = secondary
+            secondary = clip
+          }
+          processed.add(secondary.id)
+        }
+        processed.add(primary.id)
+
+        let detail = clipDetails.get(primary.id)
         if (!detail) {
-          const d = await fetchClip(clip.id)
+          const d = await fetchClip(primary.id)
           detail = { duration: d.duration_sec ?? 0, gpx: d.gpx }
-          setClipDetails(prev => new Map(prev).set(clip.id, detail!))
+          setClipDetails(prev => new Map(prev).set(primary.id, detail!))
         }
 
-        const [trimStart, trimEnd] = trims.get(clip.id) ?? [0, detail.duration]
+        const [trimStart, trimEnd] = trims.get(primary.id) ?? [0, detail.duration]
         const allPoints = detail.gpx ? parseGPX(detail.gpx) : []
-
-        // Filter points to trim range
         const gpxPoints = allPoints.filter(p => p.videoSec >= trimStart && p.videoSec <= trimEnd)
 
         sessionClips.push({
-          clipId: clip.id,
-          channel: clip.channel,
+          clipId: primary.id,
+          channel: primary.channel,
           trimStart,
           trimEnd,
-          videoUrl: `${FOOTAGE_BASE}/api/footage/${clip.id}`,
+          videoUrl: `${FOOTAGE_BASE}/api/footage/${primary.id}`,
+          peerVideoUrl: secondary ? `${FOOTAGE_BASE}/api/footage/${secondary.id}` : undefined,
           gpxPoints,
-          videoOffset: 0, // computed by buildMultiSession
-          color: '',       // assigned by buildMultiSession
-          filename: clip.filename,
-          recordedAt: clip.recorded_at,
+          videoOffset: 0,
+          color: '',
+          filename: primary.filename,
+          recordedAt: primary.recorded_at,
         })
       }
 
       buildMultiSession(sessionClips)
-      setAppMode('upload') // return to player mode
+      setAppMode('upload')
     } catch (e: any) {
       setError(e.message)
     } finally {

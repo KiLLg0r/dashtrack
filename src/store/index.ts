@@ -14,8 +14,8 @@ export interface GPSPoint {
 }
 
 export type ExtractionStatus = 'idle' | 'uploading' | 'extracting' | 'done' | 'error'
-export type MapStyle = 'satellite-streets-v12' | 'dark-v11' | 'streets-v12'
-export type AppMode = 'upload' | 'library' | 'session-builder'
+export type MapStyle = 'standard-satellite' | 'dark-v11' | 'light-v11'
+export type AppMode = 'upload' | 'library'
 export type VideoLayout = 'single' | 'side-by-side' | 'pip'
 export type ChannelFilter = 'all' | 'front' | 'rear'
 
@@ -35,6 +35,7 @@ export interface SessionClip {
   trimStart: number       // seconds into original clip
   trimEnd: number         // seconds into original clip
   videoUrl: string        // /api/footage/{clipId}
+  peerVideoUrl?: string   // opposite channel URL (rear when primary is front, or vice versa)
   gpxPoints: GPSPoint[]   // trimmed GPS points
   videoOffset: number     // cumulative playback seconds before this clip
   color: string           // segment color on map
@@ -123,6 +124,9 @@ interface DashState {
   // Derived
   currentPoint: () => GPSPoint | null
   idxAtTime: (t: number) => number
+
+  // Reset
+  reset: () => void
 }
 
 export type { LibraryClip, LibraryClipDetail }
@@ -168,7 +172,7 @@ export const useStore = create<DashState>((set, get) => ({
   setExtractionProgress: (n) => set({ extractionProgress: n }),
   setExtractionError:    (e) => set({ extractionError: e }),
 
-  mapStyle:   'satellite-streets-v12',
+  mapStyle:   'standard-satellite',
   followCar:  true,
   swapped:    false,
   currentIdx: 0,
@@ -209,6 +213,7 @@ export const useStore = create<DashState>((set, get) => ({
       primaryChannelId: clip.channel,
       multiSession: null,
       activeClipIndex: 0,
+      channelFilter: 'all',
     })
   },
 
@@ -248,6 +253,7 @@ export const useStore = create<DashState>((set, get) => ({
       currentIdx: 0,
       multiSession: null,
       activeClipIndex: 0,
+      channelFilter: 'all',
     })
   },
 
@@ -280,15 +286,25 @@ export const useStore = create<DashState>((set, get) => ({
       totalDuration: videoOffset,
     }
 
-    // Set up channels from first clip (front channel if present)
+    // Set up channels from first clip (front + rear if peer exists)
     const firstClip = coloredClips[0]
-    const channels: Channel[] = [{
-      id: firstClip.channel,
-      clipId: firstClip.clipId,
-      videoUrl: firstClip.videoUrl,
-      videoDuration: firstClip.trimEnd - firstClip.trimStart,
-      label: firstClip.channel === 'front' ? 'FRONT' : firstClip.channel === 'rear' ? 'REAR' : 'VIDEO',
-    }]
+    const peerChannelId = firstClip.channel === 'front' ? 'rear' : 'front'
+    const channels: Channel[] = [
+      {
+        id: firstClip.channel,
+        clipId: firstClip.clipId,
+        videoUrl: firstClip.videoUrl,
+        videoDuration: firstClip.trimEnd - firstClip.trimStart,
+        label: firstClip.channel === 'front' ? 'FRONT' : firstClip.channel === 'rear' ? 'REAR' : 'VIDEO',
+      },
+      ...(firstClip.peerVideoUrl ? [{
+        id: peerChannelId,
+        clipId: null as null,
+        videoUrl: firstClip.peerVideoUrl,
+        videoDuration: firstClip.trimEnd - firstClip.trimStart,
+        label: peerChannelId === 'front' ? 'FRONT' : 'REAR',
+      }] : []),
+    ]
 
     set({
       points: allPoints,
@@ -304,6 +320,29 @@ export const useStore = create<DashState>((set, get) => ({
       extractionStatus: 'done',
       extractionError: null,
       currentIdx: 0,
+      channelFilter: 'all',
+    })
+  },
+
+  reset: () => {
+    const { videoUrl } = get()
+    if (videoUrl && videoUrl.startsWith('blob:')) URL.revokeObjectURL(videoUrl)
+    set({
+      points: [],
+      videoFile: null,
+      videoUrl: null,
+      videoDuration: 0,
+      videoTime: 0,
+      playing: false,
+      extractionStatus: 'idle',
+      extractionProgress: 0,
+      extractionError: null,
+      currentIdx: 0,
+      activeClipId: null,
+      channels: [],
+      multiSession: null,
+      activeClipIndex: 0,
+      channelFilter: 'all',
     })
   },
 
