@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { MdErrorOutline, MdArrowUpward, MdArrowDownward, MdClose } from 'react-icons/md'
 import { useStore, SessionClip } from '../store'
 import { fetchClip, LibraryClip, FOOTAGE_BASE } from '../api/library'
 import LibraryView from './LibraryView'
@@ -138,8 +139,8 @@ export default function SessionBuilder() {
       </div>
 
       {error && (
-        <div style={{ padding: '6px 12px', color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 10, flexShrink: 0 }}>
-          ✗ {error}
+        <div style={{ padding: '6px 12px', color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 10, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
+          <MdErrorOutline size={14} style={{ flexShrink: 0 }} /> {error}
         </div>
       )}
 
@@ -177,9 +178,9 @@ export default function SessionBuilder() {
                 )}
 
                 {/* Move buttons */}
-                <SmallBtn onClick={() => moveClip(clip.id, -1)} disabled={i === 0}>↑</SmallBtn>
-                <SmallBtn onClick={() => moveClip(clip.id, 1)} disabled={i === selectedClips.length - 1}>↓</SmallBtn>
-                <SmallBtn onClick={() => removeClip(clip.id)}>✕</SmallBtn>
+                <SmallBtn onClick={() => moveClip(clip.id, -1)} disabled={i === 0}><MdArrowUpward size={13} /></SmallBtn>
+                <SmallBtn onClick={() => moveClip(clip.id, 1)} disabled={i === selectedClips.length - 1}><MdArrowDownward size={13} /></SmallBtn>
+                <SmallBtn onClick={() => removeClip(clip.id)}><MdClose size={13} /></SmallBtn>
               </div>
             )
           })}
@@ -220,7 +221,7 @@ function SmallBtn({ children, onClick, disabled, accent }: {
         borderRadius: 5, color: accent ? 'var(--acc)' : 'var(--txt2)',
         cursor: disabled ? 'default' : 'pointer',
         opacity: disabled ? 0.4 : 1,
-        flexShrink: 0,
+        flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}
     >
       {children}
