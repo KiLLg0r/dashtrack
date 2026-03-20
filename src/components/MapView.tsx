@@ -3,11 +3,74 @@ import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { useStore, GPSPoint } from '../store'
 import { haversine } from '../hooks/useGPX'
+import type { MultiSegmentSession } from '../store'
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN ?? ''
 
 const GAP_THRESHOLD_M = 500
 const GAP_THRESHOLD_S = 120
+const MAX_ROUTE_PTS = 2000
+const SEGMENT_COLORS = ['#f5c542', '#00e5a0', '#4da6ff', '#ff6b6b', '#c084fc', '#fb923c']
+
+/** Uniform-sample coords down to maxPts. Always includes the last point. */
+function decimateCoords(coords: number[][], maxPts: number): number[][] {
+  if (coords.length <= maxPts) return coords
+  const result: number[][] = new Array(maxPts)
+  const step = (coords.length - 1) / (maxPts - 1)
+  for (let i = 0; i < maxPts; i++) result[i] = coords[Math.round(i * step)]
+  result[maxPts - 1] = coords[coords.length - 1]
+  return result
+}
+
+// ── Visual segment ─────────────────────────────────────────────────────────
+// Groups consecutive SessionClips that are geographically/temporally
+// contiguous into a single map object. Only creates a new visual segment
+// when there is a real gap between clips.
+
+interface VisualSegment {
+  idx: number              // visual segment index (used for layer IDs)
+  pointOffset: number      // start index in flat points[]
+  pointEnd: number         // end index (exclusive) in flat points[]
+  coords: number[][]       // decimated coords for background route source
+  color: string
+}
+
+function buildVisualSegments(ms: MultiSegmentSession, totalPoints: number): VisualSegment[] {
+  const { clips, clipPointOffsets } = ms
+  const vsegs: VisualSegment[] = []
+  let segStart = 0
+
+  const flush = (segEnd: number) => {
+    const rawCoords: number[][] = []
+    for (let j = segStart; j <= segEnd; j++) {
+      for (const p of clips[j].gpxPoints) rawCoords.push([p.lon, p.lat])
+    }
+    if (!rawCoords.length) { segStart = segEnd + 1; return }
+    vsegs.push({
+      idx: vsegs.length,
+      pointOffset: clipPointOffsets[segStart],
+      pointEnd: clipPointOffsets[segEnd + 1] ?? totalPoints,
+      coords: decimateCoords(rawCoords, MAX_ROUTE_PTS),
+      color: SEGMENT_COLORS[vsegs.length % SEGMENT_COLORS.length],
+    })
+    segStart = segEnd + 1
+  }
+
+  for (let i = 0; i < clips.length - 1; i++) {
+    const a = clips[i]
+    const b = clips[i + 1]
+    const lastA = a.gpxPoints[a.gpxPoints.length - 1]
+    const firstB = b.gpxPoints[0]
+    if (!lastA || !firstB) { flush(i); continue }
+    const dist = haversine(lastA, firstB)
+    const timeDiff = Math.abs(a.videoOffset + (a.trimEnd - a.trimStart) - b.videoOffset)
+    if (dist > GAP_THRESHOLD_M || timeDiff > GAP_THRESHOLD_S) flush(i)
+  }
+  flush(clips.length - 1)
+  return vsegs
+}
+
+// ── Component ──────────────────────────────────────────────────────────────
 
 export default function MapView() {
   const {
@@ -15,14 +78,14 @@ export default function MapView() {
     setFollowCar, setMapStyle, setCurrentIdx,
   } = useStore()
 
-  const containerRef      = useRef<HTMLDivElement>(null)
-  const mapRef            = useRef<mapboxgl.Map | null>(null)
-  const carMarkerRef      = useRef<mapboxgl.Marker | null>(null)
-  const staticMarkersRef  = useRef<mapboxgl.Marker[]>([])
-  const gapMarkersRef     = useRef<mapboxgl.Marker[]>([])
-  const prevIdx           = useRef(-1)
-  const routeAdded        = useRef(false)
-  const styleFirstRun     = useRef(true)
+  const containerRef     = useRef<HTMLDivElement>(null)
+  const mapRef           = useRef<mapboxgl.Map | null>(null)
+  const carMarkerRef     = useRef<mapboxgl.Marker | null>(null)
+  const staticMarkersRef = useRef<mapboxgl.Marker[]>([])
+  const gapMarkersRef    = useRef<mapboxgl.Marker[]>([])
+  const prevIdx          = useRef(-1)
+  const styleFirstRun    = useRef(true)
+  const visualSegsRef    = useRef<VisualSegment[]>([])
 
   // Init map once
   useEffect(() => {
@@ -43,14 +106,13 @@ export default function MapView() {
 
   // Helper: clear all route layers/sources and markers
   const clearRoute = useCallback((m: mapboxgl.Map) => {
-    // Remove static markers
     staticMarkersRef.current.forEach(mk => mk.remove())
     staticMarkersRef.current = []
     gapMarkersRef.current.forEach(mk => mk.remove())
     gapMarkersRef.current = []
     if (carMarkerRef.current) { carMarkerRef.current.remove(); carMarkerRef.current = null }
 
-    // Remove single-route layers/sources
+    // Single-route layers/sources
     ;['route-click', 'route-passed', 'route-full'].forEach(id => {
       try { if (m.getLayer(id)) m.removeLayer(id) } catch { /* */ }
     })
@@ -58,22 +120,22 @@ export default function MapView() {
       try { if (m.getSource(id)) m.removeSource(id) } catch { /* */ }
     })
 
-    // Remove segment layers/sources (up to 50)
-    for (let i = 0; i < 50; i++) {
-      ;[`seg-full-${i}`, `seg-passed-${i}`, `seg-click-${i}`].forEach(id => {
+    // Visual segment layers/sources — clear as many as were rendered
+    const count = Math.max(visualSegsRef.current.length, 50)
+    for (let i = 0; i < count; i++) {
+      ;[`vseg-full-${i}`, `vseg-passed-${i}`, `vseg-click-${i}`].forEach(id => {
         try { if (m.getLayer(id)) m.removeLayer(id) } catch { /* */ }
       })
-      ;[`seg-${i}`, `seg-passed-${i}`].forEach(id => {
+      ;[`vseg-${i}`, `vseg-passed-${i}`].forEach(id => {
         try { if (m.getSource(id)) m.removeSource(id) } catch { /* */ }
       })
     }
-    routeAdded.current = false
+    visualSegsRef.current = []
   }, [])
 
-  const mkMarker = useCallback((color: string, pos: [number, number], m: mapboxgl.Map): mapboxgl.Marker => {
+  const mkMarker = useCallback((color: string, pos: [number, number], m: mapboxgl.Map) => {
     const mk = new mapboxgl.Marker({ color }).setLngLat(pos).addTo(m)
     staticMarkersRef.current.push(mk)
-    return mk
   }, [])
 
   const mkCarMarker = useCallback((pos: [number, number], m: mapboxgl.Map) => {
@@ -89,6 +151,39 @@ export default function MapView() {
     window.dispatchEvent(new CustomEvent('dashtrack:seek', { detail: { idx } }))
   }, [setCurrentIdx])
 
+  // Add visual segments to map (reusable between buildRoute and style rebuild)
+  const addVisualSegments = useCallback((
+    m: mapboxgl.Map,
+    vsegs: VisualSegment[],
+    pts: GPSPoint[],
+    currentIdx: number,
+  ) => {
+    vsegs.forEach(vseg => {
+      const { idx, coords, color, pointOffset, pointEnd } = vseg
+      const passed = pts.slice(pointOffset, currentIdx + 1).map(q => [q.lon, q.lat])
+
+      m.addSource(`vseg-${idx}`,        { type: 'geojson', data: mkLine(coords) })
+      m.addSource(`vseg-passed-${idx}`, { type: 'geojson', data: mkLine(passed.length >= 2 ? passed : [coords[0], coords[0]]) })
+
+      m.addLayer({ id: `vseg-full-${idx}`,   type: 'line', source: `vseg-${idx}`,        paint: { 'line-color': color, 'line-width': 2.5, 'line-opacity': 0.3 } })
+      m.addLayer({ id: `vseg-passed-${idx}`, type: 'line', source: `vseg-passed-${idx}`, paint: { 'line-color': color, 'line-width': 3,   'line-opacity': 1   } })
+      m.addLayer({ id: `vseg-click-${idx}`,  type: 'line', source: `vseg-${idx}`,        paint: { 'line-color': 'transparent', 'line-width': 20, 'line-opacity': 0 } })
+
+      m.on('click', `vseg-click-${idx}`, (e: mapboxgl.MapMouseEvent) => {
+        const ll = e.lngLat
+        let best = pointOffset, bestD = Infinity
+        for (let j = pointOffset; j < pointEnd; j++) {
+          const p = pts[j]
+          const d = Math.hypot(p.lat - ll.lat, p.lon - ll.lng)
+          if (d < bestD) { bestD = d; best = j }
+        }
+        seekToIdx(best)
+      })
+      m.on('mouseenter', `vseg-click-${idx}`, () => m.getCanvas().style.cursor = 'pointer')
+      m.on('mouseleave', `vseg-click-${idx}`, () => m.getCanvas().style.cursor = '')
+    })
+  }, [seekToIdx])
+
   // Add route when points change
   useEffect(() => {
     const m = mapRef.current
@@ -96,77 +191,50 @@ export default function MapView() {
 
     const buildRoute = () => {
       clearRoute(m)
-      const { multiSession: ms, points: pts } = useStore.getState()
+      const { multiSession: ms, points: pts, currentIdx: idx } = useStore.getState()
 
       if (ms) {
-        // ── Multi-segment ─────────────────────────────────────
-        ms.clips.forEach((clip, i) => {
-          const coords = clip.gpxPoints.map(p => [p.lon, p.lat])
-          if (!coords.length) return
+        // ── Multi-segment: merge contiguous clips into visual segments ─────
+        const vsegs = buildVisualSegments(ms, pts.length)
+        visualSegsRef.current = vsegs
 
-          m.addSource(`seg-${i}`,        { type: 'geojson', data: mkLine(coords) })
-          m.addSource(`seg-passed-${i}`, { type: 'geojson', data: mkLine([coords[0], coords[0]]) })
+        addVisualSegments(m, vsegs, pts, idx)
 
-          m.addLayer({ id: `seg-full-${i}`,   type: 'line', source: `seg-${i}`,        paint: { 'line-color': clip.color, 'line-width': 2.5, 'line-opacity': 0.3 } })
-          m.addLayer({ id: `seg-passed-${i}`, type: 'line', source: `seg-passed-${i}`, paint: { 'line-color': clip.color, 'line-width': 3,   'line-opacity': 1   } })
-          m.addLayer({ id: `seg-click-${i}`,  type: 'line', source: `seg-${i}`,        paint: { 'line-color': 'transparent', 'line-width': 20, 'line-opacity': 0 } })
-
-          const si = i  // closure capture
-          m.on('click', `seg-click-${si}`, (e: mapboxgl.MapMouseEvent) => {
-            const ll = e.lngLat
-            const offset = ms.clipPointOffsets[si]
-            let best = offset, bestD = Infinity
-            clip.gpxPoints.forEach((p, j) => {
-              const d = Math.hypot(p.lat - ll.lat, p.lon - ll.lng)
-              if (d < bestD) { bestD = d; best = offset + j }
-            })
-            seekToIdx(best)
-          })
-          m.on('mouseenter', `seg-click-${i}`, () => m.getCanvas().style.cursor = 'pointer')
-          m.on('mouseleave', `seg-click-${i}`, () => m.getCanvas().style.cursor = '')
-
-          // Segment start marker
-          mkMarker(clip.color, coords[0] as [number, number], m)
+        // Start marker per visual segment, end marker on last
+        vsegs.forEach((vseg, vi) => {
+          mkMarker(vseg.color, vseg.coords[0] as [number, number], m)
+          // End marker only on last visual segment
+          if (vi === vsegs.length - 1) {
+            const last = vseg.coords[vseg.coords.length - 1]
+            mkMarker('#ff4d6d', last as [number, number], m)
+          }
         })
 
-        // End marker on last segment
-        const lastClip = ms.clips[ms.clips.length - 1]
-        if (lastClip?.gpxPoints.length) {
-          const lp = lastClip.gpxPoints[lastClip.gpxPoints.length - 1]
-          mkMarker('#ff4d6d', [lp.lon, lp.lat], m)
+        // Gap markers between visual segments
+        for (let vi = 0; vi < vsegs.length - 1; vi++) {
+          const a = vsegs[vi]
+          const b = vsegs[vi + 1]
+          const lastPt = pts[a.pointEnd - 1]
+          const firstPt = pts[b.pointOffset]
+          if (!lastPt || !firstPt) continue
+          const el = document.createElement('div')
+          el.title = 'Gap — click to jump to next segment'
+          el.innerHTML = `<div style="width:20px;height:20px;border-radius:50%;background:#09090c;border:2px solid ${b.color};display:flex;align-items:center;justify-content:center;cursor:pointer;"><svg width="9" height="10" viewBox="0 0 9 10" fill="${b.color}"><polygon points="1,1 8,5 1,9"/></svg></div>`
+          el.addEventListener('click', () => seekToIdx(b.pointOffset))
+          const mk = new mapboxgl.Marker({ element: el, anchor: 'center' })
+            .setLngLat([(lastPt.lon + firstPt.lon) / 2, (lastPt.lat + firstPt.lat) / 2])
+            .addTo(m)
+          gapMarkersRef.current.push(mk)
         }
 
-        // Gap markers
-        for (let i = 0; i < ms.clips.length - 1; i++) {
-          const a = ms.clips[i]
-          const b = ms.clips[i + 1]
-          const lastA = a.gpxPoints[a.gpxPoints.length - 1]
-          const firstB = b.gpxPoints[0]
-          if (!lastA || !firstB) continue
-          const dist = haversine(lastA, firstB)
-          const timeDiff = Math.abs(a.videoOffset + (a.trimEnd - a.trimStart) - b.videoOffset)
-          if (dist > GAP_THRESHOLD_M || timeDiff > GAP_THRESHOLD_S) {
-            const el = document.createElement('div')
-            el.title = 'Gap — click to jump to next segment'
-            el.innerHTML = `<div style="width:20px;height:20px;border-radius:50%;background:#09090c;border:2px solid ${b.color};display:flex;align-items:center;justify-content:center;cursor:pointer;"><svg width="9" height="10" viewBox="0 0 9 10" fill="${b.color}"><polygon points="1,1 8,5 1,9"/></svg></div>`
-            const gapIdx = ms.clipPointOffsets[i + 1]
-            el.addEventListener('click', () => seekToIdx(gapIdx))
-            const mk = new mapboxgl.Marker({ element: el, anchor: 'center' })
-              .setLngLat([(lastA.lon + firstB.lon) / 2, (lastA.lat + firstB.lat) / 2])
-              .addTo(m)
-            gapMarkersRef.current.push(mk)
-          }
-        }
-
-        // Car marker at first point
         if (pts[0]) mkCarMarker([pts[0].lon, pts[0].lat], m)
         fitBounds(m, pts)
 
       } else {
-        // ── Single route ──────────────────────────────────────
-        const coords = pts.map((p: GPSPoint) => [p.lon, p.lat])
-        const { currentIdx: idx } = useStore.getState()
-        const passed = coords.slice(0, idx + 1)
+        // ── Single route ──────────────────────────────────────────────────
+        const rawCoords = pts.map((p: GPSPoint) => [p.lon, p.lat])
+        const coords = decimateCoords(rawCoords, MAX_ROUTE_PTS)
+        const passed = pts.slice(0, idx + 1).map((p: GPSPoint) => [p.lon, p.lat])
 
         m.addSource('route',        { type: 'geojson', data: mkLine(coords) })
         m.addSource('route-passed', { type: 'geojson', data: mkLine(passed.length >= 2 ? passed : [coords[0], coords[0]]) })
@@ -192,18 +260,17 @@ export default function MapView() {
         mkCarMarker(coords[Math.min(idx, coords.length - 1)] as [number, number], m)
         fitBounds(m, pts)
       }
-
-      routeAdded.current = true
     }
 
     if (m.isStyleLoaded()) buildRoute()
     else m.once('style.load', buildRoute)
-  }, [points, multiSession, clearRoute, mkMarker, mkCarMarker, seekToIdx])
+  }, [points, multiSession, clearRoute, mkMarker, mkCarMarker, seekToIdx, addVisualSegments])
 
   // Update car marker + passed path on index change
   useEffect(() => {
     const m = mapRef.current
     if (!m || !points.length || currentIdx === prevIdx.current) return
+    const oldIdx = prevIdx.current
     prevIdx.current = currentIdx
     const p = points[currentIdx]
     if (!p) return
@@ -212,18 +279,21 @@ export default function MapView() {
     if (followCar) m.easeTo({ center: [p.lon, p.lat], duration: 200 })
 
     if (multiSession) {
-      multiSession.clips.forEach((clip, i) => {
-        const offset = multiSession.clipPointOffsets[i]
-        const endOffset = multiSession.clipPointOffsets[i + 1] ?? points.length
-        const src = m.getSource(`seg-passed-${i}`) as mapboxgl.GeoJSONSource | undefined
+      // Only update visual segments whose range intersects the tick transition
+      visualSegsRef.current.forEach(vseg => {
+        const { idx, pointOffset, pointEnd, coords } = vseg
+        if (oldIdx < pointOffset && currentIdx < pointOffset) return  // both before
+        if (oldIdx >= pointEnd   && currentIdx >= pointEnd)   return  // both after
+
+        const src = m.getSource(`vseg-passed-${idx}`) as mapboxgl.GeoJSONSource | undefined
         if (!src) return
-        if (currentIdx < offset) {
-          const fp = clip.gpxPoints[0]
-          src.setData(mkLine(fp ? [[fp.lon, fp.lat], [fp.lon, fp.lat]] : [[0, 0], [0, 0]]))
-        } else if (currentIdx >= endOffset) {
-          src.setData(mkLine(clip.gpxPoints.map(q => [q.lon, q.lat])))
+
+        if (currentIdx < pointOffset) {
+          src.setData(mkLine([coords[0], coords[0]]))
+        } else if (currentIdx >= pointEnd) {
+          src.setData(mkLine(coords))  // already decimated
         } else {
-          const passed = clip.gpxPoints.slice(0, currentIdx - offset + 1).map(q => [q.lon, q.lat])
+          const passed = points.slice(pointOffset, currentIdx + 1).map(q => [q.lon, q.lat])
           src.setData(mkLine(passed.length >= 2 ? passed : [passed[0] ?? [0, 0], passed[0] ?? [0, 0]]))
         }
       })
@@ -240,43 +310,32 @@ export default function MapView() {
     if (!m) return
     m.setStyle(`mapbox://styles/mapbox/${mapStyle}`)
     m.once('style.load', () => {
-      const { points: pts, multiSession: ms } = useStore.getState()
+      const { points: pts, multiSession: ms, currentIdx: idx } = useStore.getState()
       if (!pts.length) return
       clearRoute(m)
       if (ms) {
-        // Trigger rebuild via setting routeAdded — the points useEffect won't re-fire
-        // so we rebuild inline (style load clears all layers)
-        ms.clips.forEach((clip, i) => {
-          const coords = clip.gpxPoints.map(p => [p.lon, p.lat])
-          if (!coords.length) return
-          m.addSource(`seg-${i}`,        { type: 'geojson', data: mkLine(coords) })
-          m.addSource(`seg-passed-${i}`, { type: 'geojson', data: mkLine([coords[0], coords[0]]) })
-          m.addLayer({ id: `seg-full-${i}`,   type: 'line', source: `seg-${i}`,        paint: { 'line-color': clip.color, 'line-width': 2.5, 'line-opacity': 0.3 } })
-          m.addLayer({ id: `seg-passed-${i}`, type: 'line', source: `seg-passed-${i}`, paint: { 'line-color': clip.color, 'line-width': 3,   'line-opacity': 1   } })
-        })
+        const vsegs = buildVisualSegments(ms, pts.length)
+        visualSegsRef.current = vsegs
+        addVisualSegments(m, vsegs, pts, idx)
       } else {
-        const coords = pts.map((p: GPSPoint) => [p.lon, p.lat])
-        const { currentIdx: idx } = useStore.getState()
-        const passed = coords.slice(0, idx + 1)
+        const coords = decimateCoords(pts.map((p: GPSPoint) => [p.lon, p.lat]), MAX_ROUTE_PTS)
+        const passed = pts.slice(0, idx + 1).map((p: GPSPoint) => [p.lon, p.lat])
         m.addSource('route',        { type: 'geojson', data: mkLine(coords) })
         m.addSource('route-passed', { type: 'geojson', data: mkLine(passed.length >= 2 ? passed : [coords[0], coords[0]]) })
         m.addLayer({ id: 'route-full',   type: 'line', source: 'route',        paint: { 'line-color': '#ffffff', 'line-width': 2.5, 'line-opacity': 0.2 } })
         m.addLayer({ id: 'route-passed', type: 'line', source: 'route-passed', paint: { 'line-color': '#f5c542', 'line-width': 3,   'line-opacity': 1   } })
       }
     })
-  }, [mapStyle, clearRoute])
+  }, [mapStyle, clearRoute, addVisualSegments])
 
-  // Determine current segment color
-  const segmentColor = multiSession
-    ? (() => {
-        const { clips, clipPointOffsets } = multiSession
-        let si = clips.length - 1
-        for (let i = 0; i < clips.length; i++) {
-          if (currentIdx < (clipPointOffsets[i + 1] ?? Infinity)) { si = i; break }
-        }
-        return clips[si]?.color ?? 'var(--acc)'
-      })()
-    : 'var(--acc)'
+  // Current visual segment color for HUD
+  const segmentColor = (() => {
+    if (!multiSession) return 'var(--acc)'
+    for (const vseg of visualSegsRef.current) {
+      if (currentIdx >= vseg.pointOffset && currentIdx < vseg.pointEnd) return vseg.color
+    }
+    return visualSegsRef.current[visualSegsRef.current.length - 1]?.color ?? 'var(--acc)'
+  })()
 
   const p = points[currentIdx]
 
@@ -344,10 +403,15 @@ function mkLine(coords: number[][]): GeoJSON.Feature {
 
 function fitBounds(m: mapboxgl.Map, pts: GPSPoint[]) {
   if (pts.length < 2) return
-  m.fitBounds([
-    [Math.min(...pts.map(p => p.lon)), Math.min(...pts.map(p => p.lat))],
-    [Math.max(...pts.map(p => p.lon)), Math.max(...pts.map(p => p.lat))],
-  ], { padding: 50 })
+  let minLon = pts[0].lon, maxLon = pts[0].lon
+  let minLat = pts[0].lat, maxLat = pts[0].lat
+  for (const p of pts) {
+    if (p.lon < minLon) minLon = p.lon
+    else if (p.lon > maxLon) maxLon = p.lon
+    if (p.lat < minLat) minLat = p.lat
+    else if (p.lat > maxLat) maxLat = p.lat
+  }
+  m.fitBounds([[minLon, minLat], [maxLon, maxLat]], { padding: 50 })
 }
 
 function bearingLabel(b: number) {

@@ -95,22 +95,35 @@ def _peer_id(clip: Clip, sess: Session) -> str | None:
 
 
 @router.get("/api/library", response_model=list[ClipResponse])
-async def list_clips(date: str | None = None, status: str = "indexed"):
-    """List all indexed clips ordered by recorded_at DESC."""
+async def list_clips(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    status: str = "indexed",
+    limit: int = 100,
+    offset: int = 0,
+):
+    """List indexed clips ordered by recorded_at DESC, paginated."""
+    from datetime import datetime as dt
+
     with Session(get_engine()) as sess:
         stmt = select(Clip).where(Clip.status == status)
-        if date:
-            from datetime import datetime as dt
-
+        if date_from:
             try:
-                day = dt.strptime(date, "%Y-%m-%d")
                 stmt = stmt.where(
-                    Clip.recorded_at >= day.replace(hour=0, minute=0, second=0),
-                    Clip.recorded_at < day.replace(hour=23, minute=59, second=59),
+                    Clip.recorded_at
+                    >= dt.strptime(date_from, "%Y-%m-%d").replace(hour=0, minute=0, second=0)
                 )
             except ValueError:
                 pass
-        stmt = stmt.order_by(Clip.recorded_at.desc())  # type: ignore
+        if date_to:
+            try:
+                stmt = stmt.where(
+                    Clip.recorded_at
+                    <= dt.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+                )
+            except ValueError:
+                pass
+        stmt = stmt.order_by(Clip.recorded_at.desc()).offset(offset).limit(limit)  # type: ignore
         clips = sess.exec(stmt).all()
 
         # Build peer map from session groups
@@ -127,6 +140,39 @@ async def list_clips(date: str | None = None, status: str = "indexed"):
                 peer_id = peers[0].id if peers else None
             results.append(_to_response(c, peer_id))
     return results
+
+
+class BatchRequest(BaseModel):
+    ids: list[str]
+
+
+@router.post("/api/library/batch", response_model=list[ClipDetailResponse])
+async def get_clips_batch(body: BatchRequest):
+    """Return metadata + GPX for multiple clips in a single request."""
+    if not body.ids:
+        return []
+    with Session(get_engine()) as sess:
+        clips = sess.exec(select(Clip).where(Clip.id.in_(body.ids))).all()
+
+        # Build peer map for all relevant sessions in one query
+        session_ids = {c.session_id for c in clips if c.session_id}
+        peer_map: dict[str, str] = {}
+        if session_ids:
+            session_clips = sess.exec(select(Clip).where(Clip.session_id.in_(session_ids))).all()
+            groups: dict[str, list[str]] = {}
+            for c in session_clips:
+                if c.session_id:
+                    groups.setdefault(c.session_id, []).append(c.id)
+            for grp_ids in groups.values():
+                if len(grp_ids) == 2:
+                    peer_map[grp_ids[0]] = grp_ids[1]
+                    peer_map[grp_ids[1]] = grp_ids[0]
+
+        clip_by_id = {c.id: c for c in clips}
+        # Preserve request order
+        return [
+            _to_detail(clip_by_id[id_], peer_map.get(id_)) for id_ in body.ids if id_ in clip_by_id
+        ]
 
 
 @router.get("/api/library/session/{session_id}", response_model=list[ClipDetailResponse])
