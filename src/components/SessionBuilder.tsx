@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { MdErrorOutline, MdArrowUpward, MdArrowDownward, MdClose } from 'react-icons/md'
 import { useStore, SessionClip } from '../store'
-import { fetchClip, LibraryClip, FOOTAGE_BASE } from '../api/library'
+import { fetchClip, fetchClipBatch, LibraryClip, FOOTAGE_BASE } from '../api/library'
 import LibraryView from './LibraryView'
 import { parseGPX, fmtTime } from '../hooks/useGPX'
 
@@ -60,39 +60,40 @@ export default function SessionBuilder() {
     setError(null)
 
     try {
-      const sessionClips: SessionClip[] = []
       const clipById = new Map(selectedClips.map(c => [c.id, c]))
       const processed = new Set<string>()
 
+      // Resolve pairs and determine which primary IDs need fetching
+      type PairEntry = { primary: LibraryClip; secondary: LibraryClip | null }
+      const pairs: PairEntry[] = []
       for (const clip of selectedClips) {
         if (processed.has(clip.id)) continue
-
-        // Detect F+R pair: if both channels of the same session are selected, group them
         const peerClipEntry = clip.peer_clip_id ? clipById.get(clip.peer_clip_id) : undefined
         let primary = clip
         let secondary = peerClipEntry ?? null
-
-        if (secondary) {
-          // Always use front as primary
-          if (clip.channel === 'rear') {
-            primary = secondary
-            secondary = clip
-          }
-          processed.add(secondary.id)
-        }
+        if (secondary && clip.channel === 'rear') { primary = secondary; secondary = clip }
+        if (secondary) processed.add(secondary.id)
         processed.add(primary.id)
+        pairs.push({ primary, secondary })
+      }
 
-        let detail = clipDetails.get(primary.id)
-        if (!detail) {
-          const d = await fetchClip(primary.id)
-          detail = { duration: d.duration_sec ?? 0, gpx: d.gpx }
-          setClipDetails(prev => new Map(prev).set(primary.id, detail!))
-        }
+      // Batch fetch only the clips not already in local cache
+      const missing = pairs.map(p => p.primary.id).filter(id => !clipDetails.has(id))
+      if (missing.length) {
+        const fetched = await fetchClipBatch(missing)
+        const newDetails = new Map(clipDetails)
+        for (const d of fetched) newDetails.set(d.id, { duration: d.duration_sec ?? 0, gpx: d.gpx })
+        setClipDetails(newDetails)
+        // Use local variable so we don't need to wait for state update
+        for (const d of fetched) clipDetails.set(d.id, { duration: d.duration_sec ?? 0, gpx: d.gpx })
+      }
 
+      const sessionClips: SessionClip[] = []
+      for (const { primary, secondary } of pairs) {
+        const detail = clipDetails.get(primary.id) ?? { duration: 0, gpx: null }
         const [trimStart, trimEnd] = trims.get(primary.id) ?? [0, detail.duration]
         const allPoints = detail.gpx ? parseGPX(detail.gpx) : []
         const gpxPoints = allPoints.filter(p => p.videoSec >= trimStart && p.videoSec <= trimEnd)
-
         sessionClips.push({
           clipId: primary.id,
           channel: primary.channel,

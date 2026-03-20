@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DayPicker } from 'react-day-picker'
 import type { DateRange } from 'react-day-picker'
 import 'react-day-picker/style.css'
 import { MdClose, MdExpandMore, MdCalendarMonth, MdUpload } from 'react-icons/md'
 import { useStore } from '../store'
 import type { SessionClip } from '../store'
-import { fetchLibrary, fetchClip, fetchSession, LibraryClip, FOOTAGE_BASE } from '../api/library'
+import { fetchLibrary, fetchClip, fetchClipBatch, fetchSession, LibraryClip, FOOTAGE_BASE } from '../api/library'
 import { parseGPX } from '../hooks/useGPX'
 import UploadZone from './UploadZone'
 
@@ -62,6 +62,8 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
   const [tab, setTab] = useState<'library' | 'upload'>(initialTab)
   const [clips, setClips] = useState<LibraryClip[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loadingId, setLoadingId] = useState<string | null>(null)
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>('all')
@@ -69,13 +71,57 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
   const [showDatePicker, setShowDatePicker] = useState(false)
   const datePickerRef = useRef<HTMLDivElement>(null)
   const [collapsedDates, setCollapsedDates] = useState<Set<string>>(new Set())
+  const [fullyLoadedDates, setFullyLoadedDates] = useState<Set<string>>(new Set())
+  const [pendingLoad, setPendingLoad] = useState<{ loadingKey: string; df?: string; dt?: string } | null>(null)
+  const offsetRef = useRef(0)
+  const sentinelRef = useRef<HTMLDivElement>(null)
 
+  const PAGE_SIZE = 100
+
+  // Re-fetch from scratch whenever date range changes (server-side filtering)
   useEffect(() => {
-    fetchLibrary()
-      .then(setClips)
+    const df = dateRange?.from ? fmtParam(dateRange.from) : undefined
+    const dt = dateRange?.to   ? fmtParam(dateRange.to)   : df
+    setLoading(true)
+    setError(null)
+    setClips([])
+    setFullyLoadedDates(new Set())
+    offsetRef.current = 0
+    fetchLibrary(0, PAGE_SIZE, df, dt)
+      .then(data => {
+        setClips(data)
+        setHasMore(data.length === PAGE_SIZE)
+        offsetRef.current = PAGE_SIZE
+      })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [])
+  }, [dateRange])
+
+  const loadMore = useCallback(() => {
+    if (loadingMore || !hasMore) return
+    const df = dateRange?.from ? fmtParam(dateRange.from) : undefined
+    const dt = dateRange?.to   ? fmtParam(dateRange.to)   : df
+    setLoadingMore(true)
+    fetchLibrary(offsetRef.current, PAGE_SIZE, df, dt)
+      .then(data => {
+        setClips(prev => [...prev, ...data])
+        setHasMore(data.length === PAGE_SIZE)
+        offsetRef.current += PAGE_SIZE
+      })
+      .catch(e => setError(e.message))
+      .finally(() => setLoadingMore(false))
+  }, [loadingMore, hasMore, dateRange])
+
+  // Infinite scroll
+  useEffect(() => {
+    const sentinel = sentinelRef.current
+    if (!sentinel) return
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) loadMore()
+    }, { rootMargin: '300px' })
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [loadMore])
 
   // Auto-close after successful upload — only if extraction completed while this modal was open
   const prevExtractionStatus = useRef(extractionStatus)
@@ -151,7 +197,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
     return displayItems
   }, [displayItems, channelFilter])
 
-  // Group by date (newest first), then apply date range filter
+  // Group by date, newest first — date filtering is done server-side
   const grouped = useMemo(() => {
     const groups: Record<string, DisplayItem[]> = {}
     for (const item of filteredItems) {
@@ -159,19 +205,8 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
       if (!groups[date]) groups[date] = []
       groups[date].push(item)
     }
-    let entries = Object.entries(groups).sort(([a], [b]) => b.localeCompare(a))
-    if (dateRange?.from) {
-      const norm = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
-      const from = norm(dateRange.from)
-      const to   = norm(dateRange.to ?? dateRange.from)
-      entries = entries.filter(([date]) => {
-        if (date === 'Unknown') return false
-        const d = norm(new Date(date + 'T12:00:00'))
-        return d >= from && d <= to
-      })
-    }
-    return entries
-  }, [filteredItems, dateRange])
+    return Object.entries(groups).sort(([a], [b]) => b.localeCompare(a))
+  }, [filteredItems])
 
   const itemKey = (item: DisplayItem) => item.primary.session_id ?? item.primary.id
 
@@ -205,6 +240,92 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
     setChecked(new Set(allKeys))
   }
 
+  const toggleDateGroup = (date: string, items: DisplayItem[]) => {
+    const groupKeys = items.map(itemKey)
+    const allChecked = groupKeys.every(k => checked.has(k))
+    setChecked(prev => {
+      const next = new Set(prev)
+      if (allChecked) groupKeys.forEach(k => next.delete(k))
+      else groupKeys.forEach(k => next.add(k))
+      return next
+    })
+  }
+
+  // ── Load-as-session helper (shared by Load All and Load Day) ─────────────
+
+  const loadAsSession = useCallback(async (loadingKey: string, channel: ChannelFilter, df?: string, dt?: string) => {
+    setLoadingId(loadingKey)
+    setError(null)
+    try {
+      const allClips: LibraryClip[] = []
+      let off = 0
+      while (true) {
+        const page = await fetchLibrary(off, PAGE_SIZE, df, dt)
+        allClips.push(...page)
+        if (page.length < PAGE_SIZE) break
+        off += PAGE_SIZE
+      }
+
+      const seen = new Set<string>()
+      const clipMap = new Map(allClips.map(c => [c.id, c]))
+      const items: DisplayItem[] = []
+      for (const clip of allClips) {
+        if (seen.has(clip.id)) continue
+        seen.add(clip.id)
+        if (clip.peer_clip_id && !seen.has(clip.peer_clip_id)) {
+          const peer = clipMap.get(clip.peer_clip_id)
+          if (peer) {
+            seen.add(peer.id)
+            items.push(clip.channel === 'front' ? { primary: clip, peer } : { primary: peer, peer: clip })
+            continue
+          }
+        }
+        items.push({ primary: clip })
+      }
+
+      let filtered = items
+      if (channel === 'front') filtered = items.filter(i => i.primary.channel === 'front')
+      else if (channel === 'rear') filtered = items.filter(i => i.primary.channel === 'rear' || !!i.peer)
+
+      filtered.sort((a, b) => (a.primary.recorded_at ?? '').localeCompare(b.primary.recorded_at ?? ''))
+
+      const useRear = channel === 'rear'
+      const primaryIds = filtered.map(item => (useRear && item.peer) ? item.peer.id : item.primary.id)
+
+      const details = await fetchClipBatch(primaryIds)
+      const detailMap = new Map(details.map(d => [d.id, d]))
+
+      const sessionClips: SessionClip[] = []
+      for (const item of filtered) {
+        const primary = (useRear && item.peer) ? item.peer : item.primary
+        const peer = (channel === 'all' && item.peer) ? item.peer : undefined
+        const detail = detailMap.get(primary.id)
+        if (!detail) continue
+        const dur = detail.duration_sec ?? 0
+        sessionClips.push({
+          clipId: primary.id,
+          channel: primary.channel,
+          trimStart: 0,
+          trimEnd: dur,
+          videoUrl: `${FOOTAGE_BASE}/api/footage/${primary.id}`,
+          peerVideoUrl: peer ? `${FOOTAGE_BASE}/api/footage/${peer.id}` : undefined,
+          gpxPoints: detail.gpx ? parseGPX(detail.gpx) : [],
+          videoOffset: 0,
+          color: '',
+          filename: primary.filename,
+          recordedAt: primary.recorded_at,
+        })
+      }
+
+      buildMultiSession(sessionClips)
+      onClose()
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setLoadingId(null)
+    }
+  }, [buildMultiSession, onClose])
+
   // ── Single-item handlers ─────────────────────────────────────────────────
 
   const loadSingle = async (clip: LibraryClip) => {
@@ -228,6 +349,95 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
     finally { setLoadingId(null) }
   }
 
+  // ── Fetch remaining pages into list ─────────────────────────────────────
+
+  const handleFetchAll = async () => {
+    setLoadingId('fetch-all')
+    setError(null)
+    try {
+      const df = dateRange?.from ? fmtParam(dateRange.from) : undefined
+      const dt = dateRange?.to   ? fmtParam(dateRange.to)   : df
+      const fetched: LibraryClip[] = []
+      let off = offsetRef.current
+      while (true) {
+        const page = await fetchLibrary(off, PAGE_SIZE, df, dt)
+        fetched.push(...page)
+        if (page.length < PAGE_SIZE) break
+        off += PAGE_SIZE
+      }
+      setClips(prev => {
+        const existingIds = new Set(prev.map(c => c.id))
+        const newClips = fetched.filter(c => !existingIds.has(c.id))
+        if (!newClips.length) return prev
+        return [...prev, ...newClips].sort((a, b) =>
+          (b.recorded_at ?? '').localeCompare(a.recorded_at ?? '')
+        )
+      })
+      setHasMore(false)
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setLoadingId(null)
+    }
+  }
+
+  const handleFetchDay = async (date: string) => {
+    setLoadingId(`fetch-${date}`)
+    setError(null)
+    try {
+      const dayClips: LibraryClip[] = []
+      let off = 0
+      while (true) {
+        const page = await fetchLibrary(off, PAGE_SIZE, date, date)
+        dayClips.push(...page)
+        if (page.length < PAGE_SIZE) break
+        off += PAGE_SIZE
+      }
+      setClips(prev => {
+        const existingIds = new Set(prev.map(c => c.id))
+        const newClips = dayClips.filter(c => !existingIds.has(c.id))
+        if (!newClips.length) return prev
+        return [...prev, ...newClips].sort((a, b) =>
+          (b.recorded_at ?? '').localeCompare(a.recorded_at ?? '')
+        )
+      })
+      setFullyLoadedDates(prev => new Set(prev).add(date))
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setLoadingId(null)
+    }
+  }
+
+  // ── Load as session ───────────────────────────────────────────────────────
+
+  const hasPairedClips = displayItems.some(item => !!item.peer)
+
+  const handleLoadAll = () => {
+    const df = dateRange?.from ? fmtParam(dateRange.from) : undefined
+    const dt = dateRange?.to   ? fmtParam(dateRange.to)   : df
+    if (hasPairedClips) {
+      setPendingLoad({ loadingKey: 'load-all', df, dt })
+    } else {
+      loadAsSession('load-all', channelFilter, df, dt)
+    }
+  }
+
+  const handleLoadDay = (date: string, items: DisplayItem[]) => {
+    if (items.some(item => !!item.peer)) {
+      setPendingLoad({ loadingKey: `load-day-${date}`, df: date, dt: date })
+    } else {
+      loadAsSession(`load-day-${date}`, channelFilter, date, date)
+    }
+  }
+
+  const confirmLoad = (channel: ChannelFilter) => {
+    if (!pendingLoad) return
+    const { loadingKey, df, dt } = pendingLoad
+    setPendingLoad(null)
+    loadAsSession(loadingKey, channel, df, dt)
+  }
+
   // ── Multi-select load ────────────────────────────────────────────────────
 
   const handleMultiLoad = async (channel: LoadChannel) => {
@@ -242,16 +452,22 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
 
     setLoadingId('multi')
     try {
-      const sessionClips: SessionClip[] = []
+      // Collect the primary clip ID for each item (respects channel filter)
+      const primaryIds = sorted.map(item =>
+        (channel === 'rear' && item.peer) ? item.peer.id : item.primary.id
+      )
 
+      // Single batch request instead of N individual requests
+      const details = await fetchClipBatch(primaryIds)
+      const detailMap = new Map(details.map(d => [d.id, d]))
+
+      const sessionClips: SessionClip[] = []
       for (const item of sorted) {
         const primary = (channel === 'rear' && item.peer) ? item.peer : item.primary
         const peerClip = (channel === 'both' && item.peer) ? item.peer : undefined
-
-        const detail = await fetchClip(primary.id)
+        const detail = detailMap.get(primary.id)
+        if (!detail) continue
         const dur = detail.duration_sec ?? 0
-        const gpxPoints = detail.gpx ? parseGPX(detail.gpx) : []
-
         sessionClips.push({
           clipId: primary.id,
           channel: primary.channel,
@@ -259,7 +475,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
           trimEnd: dur,
           videoUrl: `${FOOTAGE_BASE}/api/footage/${primary.id}`,
           peerVideoUrl: peerClip ? `${FOOTAGE_BASE}/api/footage/${peerClip.id}` : undefined,
-          gpxPoints,
+          gpxPoints: detail.gpx ? parseGPX(detail.gpx) : [],
           videoOffset: 0,
           color: '',
           filename: primary.filename,
@@ -347,7 +563,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
         </div>
 
         {/* ── Filter bar (library tab only) ── */}
-        {tab === 'library' && !loading && !error && displayItems.length > 0 && (
+        {tab === 'library' && !loading && !error && clips.length > 0 && (
           <div style={{
             padding: '7px 16px',
             borderBottom: '1px solid var(--b1)',
@@ -513,6 +729,46 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
             >
               Select all
             </button>
+
+            {/* Fetch all — only shown when more pages exist */}
+            {hasMore && (
+              <button
+                onClick={handleFetchAll}
+                disabled={loadingId === 'fetch-all'}
+                title="Fetch all remaining clips into the list"
+                style={{
+                  fontFamily: 'var(--mono)', fontSize: 10,
+                  padding: '3px 9px',
+                  background: 'transparent',
+                  border: '1px solid var(--b2)',
+                  borderRadius: 5, color: 'var(--txt2)',
+                  cursor: loadingId === 'fetch-all' ? 'wait' : 'pointer',
+                  opacity: loadingId === 'fetch-all' ? 0.5 : 1,
+                  transition: 'all .1s', whiteSpace: 'nowrap',
+                }}
+              >
+                {loadingId === 'fetch-all' ? 'Fetching…' : 'Fetch all'}
+              </button>
+            )}
+
+            {/* Load all — loads everything as a session */}
+            <button
+              onClick={handleLoadAll}
+              disabled={loadingId === 'load-all'}
+              title={`Load all ${channelFilter !== 'all' ? channelFilter + ' ' : ''}clips${dateRange?.from ? ' in selected period' : ''} as a session`}
+              style={{
+                fontFamily: 'var(--mono)', fontSize: 10,
+                padding: '3px 9px',
+                background: 'rgba(0,229,160,.08)',
+                border: '1px solid rgba(0,229,160,.3)',
+                borderRadius: 5, color: 'var(--grn)',
+                cursor: loadingId === 'load-all' ? 'wait' : 'pointer',
+                opacity: loadingId === 'load-all' ? 0.5 : 1,
+                transition: 'all .1s', whiteSpace: 'nowrap',
+              }}
+            >
+              {loadingId === 'load-all' ? 'Loading…' : 'Load all'}
+            </button>
           </div>
         )}
 
@@ -541,14 +797,13 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
             </div>
           )}
 
-          {!loading && !error && displayItems.length === 0 && (
+          {!loading && !error && clips.length === 0 && (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--txt3)', fontFamily: 'var(--mono)', fontSize: 11, lineHeight: 2.2 }}>
-              No clips indexed yet.<br />
-              <code style={{ color: 'var(--txt2)' }}>-v /footage:/footage</code>
+              {dateRange?.from ? 'No recordings match the selected date range.' : <>No clips indexed yet.<br /><code style={{ color: 'var(--txt2)' }}>-v /footage:/footage</code></>}
             </div>
           )}
 
-          {!loading && !error && displayItems.length > 0 && totalVisible === 0 && (
+          {!loading && !error && clips.length > 0 && totalVisible === 0 && (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--txt3)', fontFamily: 'var(--mono)', fontSize: 11 }}>
               No recordings match the current filter.
             </div>
@@ -556,47 +811,101 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
 
           {grouped.map(([date, items]) => {
             const isCollapsed = collapsedDates.has(date)
+            const groupKeys = items.map(itemKey)
+            const checkedCount = groupKeys.filter(k => checked.has(k)).length
+            const allGroupChecked = checkedCount === groupKeys.length
+            const someGroupChecked = checkedCount > 0 && !allGroupChecked
+            const dayFetching = loadingId === `fetch-${date}`
+            const dayLoadingSession = loadingId === `load-day-${date}`
+            const dayFullyLoaded = !hasMore || fullyLoadedDates.has(date)
             return (
               <div key={date}>
-                {/* Date header — clickable to collapse/expand */}
-                <button
-                  onClick={() => toggleDateCollapse(date)}
+                {/* Date header */}
+                <div
                   style={{
-                    width: '100%', textAlign: 'left',
+                    width: '100%',
                     display: 'flex', alignItems: 'center', gap: 8,
                     padding: '9px 16px 7px',
                     position: 'sticky', top: 0, zIndex: 1,
                     background: 'var(--s1)',
-                    border: 'none', borderBottom: '1px solid var(--b1)',
-                    cursor: 'pointer',
+                    borderBottom: '1px solid var(--b1)',
                     transition: 'background .1s',
                   }}
                   onMouseEnter={e => (e.currentTarget.style.background = 'var(--s2)')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'var(--s1)')}
                 >
-                  <span style={{
-                    fontSize: 11, fontWeight: 700,
-                    color: 'var(--txt2)', fontFamily: 'var(--mono)',
-                    letterSpacing: '.04em',
-                  }}>
-                    {formatDate(date)}
-                  </span>
-                  <span style={{
-                    fontSize: 10, color: 'var(--txt3)', fontFamily: 'var(--mono)',
-                  }}>
-                    ({items.length})
-                  </span>
-                  <MdExpandMore
-                    size={18}
-                    style={{
-                      marginLeft: 'auto',
-                      color: 'var(--txt3)',
-                      transform: isCollapsed ? 'rotate(-90deg)' : 'none',
-                      transition: 'transform .15s',
-                      flexShrink: 0,
-                    }}
+                  {/* Group checkbox */}
+                  <GroupCheckbox
+                    checked={allGroupChecked}
+                    indeterminate={someGroupChecked}
+                    onChange={() => toggleDateGroup(date, items)}
                   />
-                </button>
+
+                  {/* Collapse toggle area */}
+                  <div
+                    onClick={() => toggleDateCollapse(date)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, cursor: 'pointer', minWidth: 0 }}
+                  >
+                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--txt2)', fontFamily: 'var(--mono)', letterSpacing: '.04em', whiteSpace: 'nowrap' }}>
+                      {formatDate(date)}
+                    </span>
+                    <span style={{ fontSize: 10, color: 'var(--txt3)', fontFamily: 'var(--mono)', whiteSpace: 'nowrap' }}>
+                      ({items.length})
+                    </span>
+                    <MdExpandMore
+                      size={18}
+                      style={{
+                        marginLeft: 'auto',
+                        color: 'var(--txt3)',
+                        transform: isCollapsed ? 'rotate(-90deg)' : 'none',
+                        transition: 'transform .15s',
+                        flexShrink: 0,
+                      }}
+                    />
+                  </div>
+
+                  {/* Fetch day — hidden once all clips for that day are in the list */}
+                  {!dayFullyLoaded && (
+                    <button
+                      onClick={e => { e.stopPropagation(); handleFetchDay(date) }}
+                      disabled={dayFetching}
+                      title={`Fetch all clips from ${formatDate(date)} into the list`}
+                      style={{
+                        fontFamily: 'var(--mono)', fontSize: 9,
+                        padding: '2px 7px',
+                        background: 'transparent',
+                        border: '1px solid var(--b2)',
+                        borderRadius: 4, color: 'var(--txt2)',
+                        cursor: dayFetching ? 'wait' : 'pointer',
+                        opacity: dayFetching ? 0.5 : 1,
+                        whiteSpace: 'nowrap', flexShrink: 0,
+                        transition: 'all .1s',
+                      }}
+                    >
+                      {dayFetching ? '…' : 'Fetch day'}
+                    </button>
+                  )}
+
+                  {/* Load day — always visible, loads that day as a session */}
+                  <button
+                    onClick={e => { e.stopPropagation(); handleLoadDay(date, items) }}
+                    disabled={dayLoadingSession}
+                    title={`Load all clips from ${formatDate(date)} as a session`}
+                    style={{
+                      fontFamily: 'var(--mono)', fontSize: 9,
+                      padding: '2px 7px',
+                      background: 'rgba(0,229,160,.08)',
+                      border: '1px solid rgba(0,229,160,.3)',
+                      borderRadius: 4, color: 'var(--grn)',
+                      cursor: dayLoadingSession ? 'wait' : 'pointer',
+                      opacity: dayLoadingSession ? 0.5 : 1,
+                      whiteSpace: 'nowrap', flexShrink: 0,
+                      transition: 'all .1s',
+                    }}
+                  >
+                    {dayLoadingSession ? '…' : 'Load day'}
+                  </button>
+                </div>
 
                 {/* Clip rows — hidden when collapsed */}
                 {!isCollapsed && items.map(item => {
@@ -664,7 +973,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
                                 <>
                                   <RowBtn onClick={() => loadSingle(item.primary)} loading={isRowLoading} dim>Front</RowBtn>
                                   <RowBtn onClick={() => loadSingle(item.peer!)} loading={isRowLoading} dim>Rear</RowBtn>
-                                  <RowBtn onClick={() => loadBoth(item)} loading={isRowLoading} green>Load Both</RowBtn>
+                                  <RowBtn onClick={() => loadBoth(item)} loading={isRowLoading}>Load Both</RowBtn>
                                 </>
                               ) : channelFilter === 'rear' ? (
                                 <RowBtn onClick={() => loadSingle(item.peer ?? item.primary)} loading={isRowLoading}>Load</RowBtn>
@@ -692,6 +1001,13 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
               </div>
             )
           })}
+          {/* Infinite scroll sentinel */}
+          <div ref={sentinelRef} style={{ height: 1 }} />
+          {loadingMore && (
+            <div style={{ padding: '10px 16px', textAlign: 'center', color: 'var(--txt3)', fontFamily: 'var(--mono)', fontSize: 10 }}>
+              Loading more…
+            </div>
+          )}
         </div>}
 
         {/* ── Footer — appears when 1+ items are checked (library tab only) ── */}
@@ -735,11 +1051,96 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
           </div>
         )}
       </div>
+
+      {/* ── Channel picker popup ── */}
+      {pendingLoad && (
+        <div
+          style={{
+            position: 'absolute', inset: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 10,
+          }}
+          onClick={() => setPendingLoad(null)}
+        >
+          <div
+            style={{
+              background: 'var(--s2)',
+              border: '1px solid var(--b3)',
+              borderRadius: 10,
+              padding: '20px 24px',
+              display: 'flex', flexDirection: 'column', gap: 14,
+              boxShadow: '0 8px 40px rgba(0,0,0,.7)',
+              minWidth: 240,
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Title row with X */}
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--txt2)', fontWeight: 700, flex: 1 }}>
+                Select channel
+              </span>
+              <button
+                onClick={() => setPendingLoad(null)}
+                style={{
+                  background: 'transparent', border: '1px solid var(--b2)',
+                  borderRadius: 5, color: 'var(--txt3)', cursor: 'pointer',
+                  padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}
+              >
+                <MdClose size={14} />
+              </button>
+            </div>
+
+            {/* Channel buttons */}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <FooterBtn onClick={() => confirmLoad('front')}>Front</FooterBtn>
+              <FooterBtn onClick={() => confirmLoad('rear')}>Rear</FooterBtn>
+              <FooterBtn onClick={() => confirmLoad('all')}>Both</FooterBtn>
+            </div>
+
+            {/* Cancel */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 4 }}>
+              <button
+                onClick={() => setPendingLoad(null)}
+                style={{
+                  fontFamily: 'var(--mono)', fontSize: 10,
+                  background: 'transparent', border: 'none',
+                  color: 'var(--txt3)', cursor: 'pointer',
+                  padding: 0,
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────
+
+function GroupCheckbox({ checked, indeterminate, onChange }: {
+  checked: boolean
+  indeterminate: boolean
+  onChange: () => void
+}) {
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = indeterminate
+  }, [indeterminate])
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      onChange={onChange}
+      onClick={e => e.stopPropagation()}
+      style={{ cursor: 'pointer', accentColor: 'var(--acc)', width: 14, height: 14, flexShrink: 0 }}
+    />
+  )
+}
 
 function ChannelBadge({ channel }: { channel: string }) {
   const color = channel === 'front' ? 'var(--acc)' : channel === 'rear' ? '#4da6ff' : 'var(--txt3)'
@@ -810,6 +1211,10 @@ function FooterBtn({ children, onClick, green, disabled }: {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+function fmtParam(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 
 function fmtDur(sec: number): string {
   const h = Math.floor(sec / 3600)

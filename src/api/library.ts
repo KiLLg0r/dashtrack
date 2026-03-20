@@ -25,8 +25,16 @@ export interface LibraryClipDetail extends LibraryClip {
   gpx: string | null
 }
 
-export async function fetchLibrary(): Promise<LibraryClip[]> {
-  const res = await fetch('/api/library')
+export async function fetchLibrary(
+  offset = 0,
+  limit = 100,
+  dateFrom?: string,
+  dateTo?: string,
+): Promise<LibraryClip[]> {
+  const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
+  if (dateFrom) params.set('date_from', dateFrom)
+  if (dateTo) params.set('date_to', dateTo)
+  const res = await fetch(`/api/library?${params}`)
   if (!res.ok) throw new Error(`Library fetch failed: ${res.status}`)
   return res.json()
 }
@@ -34,6 +42,17 @@ export async function fetchLibrary(): Promise<LibraryClip[]> {
 export async function fetchClip(id: string): Promise<LibraryClipDetail> {
   const res = await fetch(`/api/library/${id}`)
   if (!res.ok) throw new Error(`Clip fetch failed: ${res.status}`)
+  return res.json()
+}
+
+export async function fetchClipBatch(ids: string[]): Promise<LibraryClipDetail[]> {
+  if (!ids.length) return []
+  const res = await fetch('/api/library/batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  })
+  if (!res.ok) throw new Error(`Batch fetch failed: ${res.status}`)
   return res.json()
 }
 
