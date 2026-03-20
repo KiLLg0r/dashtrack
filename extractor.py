@@ -61,6 +61,8 @@ def _parse_block(data: bytes, offset: int) -> GPSPoint | None:
 
         if not (0 <= lat_nmea <= 9000) or not (0 <= lon_nmea <= 18000):
             return None
+        if lat_nmea == 0.0 and lon_nmea == 0.0:
+            return None  # uninitialised coordinates, not a real fix
 
         lat = _nmea_to_decimal(lat_nmea, ns)
         lon = _nmea_to_decimal(lon_nmea, ew)
