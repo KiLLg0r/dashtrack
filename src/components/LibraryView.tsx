@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MdErrorOutline } from 'react-icons/md'
 import { useStore } from '../store'
 import { fetchLibrary, fetchClip, fetchSession, LibraryClip } from '../api/library'
+
+const PAGE_SIZE = 100
 
 interface Props {
   selectionMode?: boolean
@@ -13,17 +15,50 @@ export default function LibraryView({ selectionMode = false, selectedIds = new S
   const { loadLibraryClip, loadSession } = useStore()
   const [clips, setClips] = useState<LibraryClip[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
+  const [offsetRef] = useState({ value: 0 })
   const [error, setError] = useState<string | null>(null)
   const [loadingId, setLoadingId] = useState<string | null>(null)
+  const sentinelRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     setLoading(true)
     setError(null)
-    fetchLibrary()
-      .then(setClips)
+    offsetRef.value = 0
+    fetchLibrary(0, PAGE_SIZE)
+      .then(data => {
+        setClips(data)
+        setHasMore(data.length === PAGE_SIZE)
+        offsetRef.value = PAGE_SIZE
+      })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }, [])
+
+  const loadMore = useCallback(() => {
+    if (loadingMore || !hasMore) return
+    setLoadingMore(true)
+    fetchLibrary(offsetRef.value, PAGE_SIZE)
+      .then(data => {
+        setClips(prev => [...prev, ...data])
+        setHasMore(data.length === PAGE_SIZE)
+        offsetRef.value += PAGE_SIZE
+      })
+      .catch(e => setError(e.message))
+      .finally(() => setLoadingMore(false))
+  }, [loadingMore, hasMore])
+
+  // Infinite scroll — trigger loadMore when sentinel enters viewport
+  useEffect(() => {
+    const sentinel = sentinelRef.current
+    if (!sentinel) return
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) loadMore()
+    }, { rootMargin: '300px' })
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [loadMore])
 
   // Deduplicate session pairs — show front+rear as a single display item
   const displayItems = useMemo(() => {
@@ -154,6 +189,14 @@ export default function LibraryView({ selectionMode = false, selectedIds = new S
           })}
         </div>
       ))}
+
+      {/* Infinite scroll sentinel */}
+      <div ref={sentinelRef} style={{ height: 1 }} />
+      {loadingMore && (
+        <div style={{ padding: '10px 12px', textAlign: 'center', color: 'var(--txt3)', fontFamily: 'var(--mono)', fontSize: 10 }}>
+          Loading more…
+        </div>
+      )}
     </div>
   )
 }
