@@ -74,7 +74,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
   const [fullyLoadedDates, setFullyLoadedDates] = useState<Set<string>>(new Set())
   const [pendingLoad, setPendingLoad] = useState<{ loadingKey: string; df?: string; dt?: string } | null>(null)
   const offsetRef = useRef(0)
-  const sentinelRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
 
   const PAGE_SIZE = 100
 
@@ -112,15 +112,10 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
       .finally(() => setLoadingMore(false))
   }, [loadingMore, hasMore, dateRange])
 
-  // Infinite scroll
-  useEffect(() => {
-    const sentinel = sentinelRef.current
-    if (!sentinel) return
-    const observer = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting) loadMore()
-    }, { rootMargin: '300px' })
-    observer.observe(sentinel)
-    return () => observer.disconnect()
+  // Infinite scroll — triggered only by user scrolling, not by content collapsing
+  const handleListScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 300) loadMore()
   }, [loadMore])
 
   // Auto-close after successful upload — only if extraction completed while this modal was open
@@ -492,6 +487,8 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
   // ── Render ───────────────────────────────────────────────────────────────
 
   const totalVisible = grouped.reduce((sum, [, items]) => sum + items.length, 0)
+  // Only the date at the pagination boundary (oldest date in the loaded list) can have incomplete data
+  const boundaryDate = clips.length > 0 ? clips[clips.length - 1].recorded_at?.slice(0, 10) : undefined
 
   return (
     <div
@@ -780,7 +777,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
         )}
 
         {/* ── Library tab body ── */}
-        {tab === 'library' && <div style={{ flex: 1, overflowY: 'auto' }}>
+        {tab === 'library' && <div ref={listRef} onScroll={handleListScroll} style={{ flex: 1, overflowY: 'auto' }}>
           {loading && (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--txt3)', fontFamily: 'var(--mono)', fontSize: 11 }}>
               Loading library…
@@ -817,7 +814,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
             const someGroupChecked = checkedCount > 0 && !allGroupChecked
             const dayFetching = loadingId === `fetch-${date}`
             const dayLoadingSession = loadingId === `load-day-${date}`
-            const dayFullyLoaded = !hasMore || fullyLoadedDates.has(date)
+            const dayFullyLoaded = !hasMore || fullyLoadedDates.has(date) || date !== boundaryDate
             return (
               <div key={date}>
                 {/* Date header */}
@@ -1001,8 +998,6 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
               </div>
             )
           })}
-          {/* Infinite scroll sentinel */}
-          <div ref={sentinelRef} style={{ height: 1 }} />
           {loadingMore && (
             <div style={{ padding: '10px 16px', textAlign: 'center', color: 'var(--txt3)', fontFamily: 'var(--mono)', fontSize: 10 }}>
               Loading more…
