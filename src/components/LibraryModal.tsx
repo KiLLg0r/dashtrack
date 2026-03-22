@@ -522,7 +522,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
         border: '1px solid var(--b3)',
         borderRadius: 10,
         width: 'min(740px, 96vw)',
-        height: 'min(82vh, 720px)',
+        height: 'min(90dvh, 720px)',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
@@ -672,7 +672,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
                       content:''; position:absolute; bottom:3px; left:50%; transform:translateX(-50%);
                       width:4px; height:4px; border-radius:50%; background:#f5c542; opacity:.8; }
                   `}</style>
-                  <div style={{ display: 'flex' }}>
+                  <div style={{ display: 'flex', overflowX: 'auto' }}>
                     {/* Presets */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '8px 8px 8px 4px', borderRight: '1px solid var(--b2)', minWidth: 96 }}>
                       {DATE_PRESETS.map(({ label, range }) => {
