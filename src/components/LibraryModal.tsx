@@ -158,6 +158,30 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
     }
   }, [])
 
+  const fetchAllClipsForDay = useCallback(async (date: string) => {
+    if (dayLoadingRef.current.has(date)) return
+    dayLoadingRef.current.add(date)
+    setDayLoading(prev => ({ ...prev, [date]: true }))
+    try {
+      const all: LibraryClip[] = []
+      let off = dayOffsetRef.current[date] ?? 0
+      while (true) {
+        const page = await fetchLibrary(off, DAY_PAGE_SIZE, date, date)
+        all.push(...page)
+        off += DAY_PAGE_SIZE
+        if (page.length < DAY_PAGE_SIZE) break
+      }
+      setDayClips(prev => ({ ...prev, [date]: [...(prev[date] ?? []), ...all] }))
+      setDayHasMore(prev => ({ ...prev, [date]: false }))
+      dayOffsetRef.current[date] = off
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      dayLoadingRef.current.delete(date)
+      setDayLoading(prev => { const n = { ...prev }; delete n[date]; return n })
+    }
+  }, [])
+
   // Infinite scroll — load more days, then load more clips for last expanded day with more
   const handleListScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget
@@ -886,7 +910,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
                   {/* Fetch day — fetches remaining clips for this day */}
                   {hasMoreClips && (
                     <button
-                      onClick={e => { e.stopPropagation(); fetchClipsForDay(day.date) }}
+                      onClick={e => { e.stopPropagation(); fetchAllClipsForDay(day.date) }}
                       disabled={isLoadingDay}
                       title={`Fetch all remaining clips for ${formatDate(day.date)}`}
                       style={{
