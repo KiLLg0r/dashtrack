@@ -175,6 +175,55 @@ async def get_clips_batch(body: BatchRequest):
         ]
 
 
+class DayEntry(BaseModel):
+    date: str
+    count: int
+
+
+@router.get("/api/library/days", response_model=list[DayEntry])
+async def list_days(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    status: str = "indexed",
+    limit: int = 100,
+    offset: int = 0,
+):
+    """List distinct recording days with clip counts, ordered newest first."""
+    from datetime import datetime as dt
+
+    from sqlalchemy import func
+
+    with Session(get_engine()) as sess:
+        stmt = select(
+            func.date(Clip.recorded_at).label("day"),
+            func.count(Clip.id).label("cnt"),
+        ).where(Clip.status == status)
+        if date_from:
+            try:
+                stmt = stmt.where(
+                    Clip.recorded_at
+                    >= dt.strptime(date_from, "%Y-%m-%d").replace(hour=0, minute=0, second=0)
+                )
+            except ValueError:
+                pass
+        if date_to:
+            try:
+                stmt = stmt.where(
+                    Clip.recorded_at
+                    <= dt.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+                )
+            except ValueError:
+                pass
+        stmt = (
+            stmt.group_by(func.date(Clip.recorded_at))
+            .order_by(func.date(Clip.recorded_at).desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        rows = sess.exec(stmt).all()
+        return [DayEntry(date=str(row.day), count=row.cnt) for row in rows]
+
+
 @router.get("/api/library/session/{session_id}", response_model=list[ClipDetailResponse])
 async def get_session_clips(session_id: str):
     """Return all clips in a session (front + rear) with full GPX."""
