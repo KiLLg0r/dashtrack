@@ -504,7 +504,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
         border: '1px solid var(--b3)',
         borderRadius: 10,
         width: 'min(740px, 96vw)',
-        height: 'min(82vh, 720px)',
+        height: 'min(90dvh, 720px)',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
@@ -650,7 +650,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
                     .dt-rdp .rdp-today:not(.rdp-outside):not(.rdp-selected) .rdp-day_button { color:#f5c542 }
                     .dt-rdp .rdp-outside { opacity:.35 }
                   `}</style>
-                  <div style={{ display: 'flex' }}>
+                  <div style={{ display: 'flex', overflowX: 'auto' }}>
                     {/* Presets */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 2, padding: '8px 8px 8px 4px', borderRight: '1px solid var(--b2)', minWidth: 96 }}>
                       {DATE_PRESETS.map(({ label, range }) => {
