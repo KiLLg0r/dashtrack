@@ -5,7 +5,7 @@ import 'react-day-picker/style.css'
 import { MdClose, MdExpandMore, MdCalendarMonth, MdUpload } from 'react-icons/md'
 import { useStore } from '../store'
 import type { SessionClip } from '../store'
-import { fetchLibrary, fetchClip, fetchClipBatch, fetchSession, LibraryClip, FOOTAGE_BASE } from '../api/library'
+import { fetchLibrary, fetchDays, fetchClip, fetchClipBatch, fetchSession, LibraryClip, DayEntry, FOOTAGE_BASE } from '../api/library'
 import { parseGPX } from '../hooks/useGPX'
 import UploadZone from './UploadZone'
 
@@ -60,10 +60,29 @@ interface Props {
 export default function LibraryModal({ onClose, initialTab = 'library', checked, setChecked }: Props) {
   const { loadLibraryClip, loadSession, buildMultiSession, extractionStatus } = useStore()
   const [tab, setTab] = useState<'library' | 'upload'>(initialTab)
-  const [clips, setClips] = useState<LibraryClip[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadingMore, setLoadingMore] = useState(false)
-  const [hasMore, setHasMore] = useState(false)
+
+  // Days-level state
+  const [days, setDays] = useState<DayEntry[]>([])
+  const [daysLoading, setDaysLoading] = useState(true)
+  const [daysLoadingMore, setDaysLoadingMore] = useState(false)
+  const [daysHasMore, setDaysHasMore] = useState(false)
+  const daysOffsetRef = useRef(0)
+
+  // Per-day clips state
+  const [dayClips, setDayClips] = useState<Record<string, LibraryClip[]>>({})
+  const [dayHasMore, setDayHasMore] = useState<Record<string, boolean>>({})
+  const [dayLoading, setDayLoading] = useState<Record<string, boolean>>({})
+  const dayOffsetRef = useRef<Record<string, number>>({})
+  const dayLoadingRef = useRef(new Set<string>())
+
+  // All recording dates for calendar dot markers (fetched once, no filter)
+  const [recordingDates, setRecordingDates] = useState<Date[]>([])
+  useEffect(() => {
+    fetchDays(0, 10000).then(data => {
+      setRecordingDates(data.map(d => new Date(d.date + 'T00:00:00')))
+    }).catch(() => {})
+  }, [])
+
   const [error, setError] = useState<string | null>(null)
   const [loadingId, setLoadingId] = useState<string | null>(null)
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>('all')
@@ -71,52 +90,85 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
   const [showDatePicker, setShowDatePicker] = useState(false)
   const datePickerRef = useRef<HTMLDivElement>(null)
   const [collapsedDates, setCollapsedDates] = useState<Set<string>>(new Set())
-  const [fullyLoadedDates, setFullyLoadedDates] = useState<Set<string>>(new Set())
   const [pendingLoad, setPendingLoad] = useState<{ loadingKey: string; df?: string; dt?: string } | null>(null)
-  const offsetRef = useRef(0)
   const listRef = useRef<HTMLDivElement>(null)
 
-  const PAGE_SIZE = 100
+  const DAYS_PAGE_SIZE = 100
+  const DAY_PAGE_SIZE = 50
 
-  // Re-fetch from scratch whenever date range changes (server-side filtering)
+  // Re-fetch days from scratch whenever date range changes
   useEffect(() => {
     const df = dateRange?.from ? fmtParam(dateRange.from) : undefined
     const dt = dateRange?.to   ? fmtParam(dateRange.to)   : df
-    setLoading(true)
+    setDaysLoading(true)
     setError(null)
-    setClips([])
-    setFullyLoadedDates(new Set())
-    offsetRef.current = 0
-    fetchLibrary(0, PAGE_SIZE, df, dt)
+    setDays([])
+    setDayClips({})
+    setDayHasMore({})
+    setDayLoading({})
+    dayOffsetRef.current = {}
+    dayLoadingRef.current.clear()
+    daysOffsetRef.current = 0
+    fetchDays(0, DAYS_PAGE_SIZE, df, dt)
       .then(data => {
-        setClips(data)
-        setHasMore(data.length === PAGE_SIZE)
-        offsetRef.current = PAGE_SIZE
+        setDays(data)
+        setDaysHasMore(data.length === DAYS_PAGE_SIZE)
+        setCollapsedDates(new Set(data.map(d => d.date)))
+        daysOffsetRef.current = DAYS_PAGE_SIZE
       })
       .catch(e => setError(e.message))
-      .finally(() => setLoading(false))
+      .finally(() => setDaysLoading(false))
   }, [dateRange])
 
-  const loadMore = useCallback(() => {
-    if (loadingMore || !hasMore) return
+  const loadMoreDays = useCallback(() => {
+    if (daysLoadingMore || !daysHasMore) return
     const df = dateRange?.from ? fmtParam(dateRange.from) : undefined
     const dt = dateRange?.to   ? fmtParam(dateRange.to)   : df
-    setLoadingMore(true)
-    fetchLibrary(offsetRef.current, PAGE_SIZE, df, dt)
+    setDaysLoadingMore(true)
+    fetchDays(daysOffsetRef.current, DAYS_PAGE_SIZE, df, dt)
       .then(data => {
-        setClips(prev => [...prev, ...data])
-        setHasMore(data.length === PAGE_SIZE)
-        offsetRef.current += PAGE_SIZE
+        setDays(prev => [...prev, ...data])
+        setDaysHasMore(data.length === DAYS_PAGE_SIZE)
+        setCollapsedDates(prev => {
+          const next = new Set(prev)
+          data.forEach(d => next.add(d.date))
+          return next
+        })
+        daysOffsetRef.current += DAYS_PAGE_SIZE
       })
       .catch(e => setError(e.message))
-      .finally(() => setLoadingMore(false))
-  }, [loadingMore, hasMore, dateRange])
+      .finally(() => setDaysLoadingMore(false))
+  }, [daysLoadingMore, daysHasMore, dateRange])
 
-  // Infinite scroll — triggered only by user scrolling, not by content collapsing
+  const fetchClipsForDay = useCallback(async (date: string) => {
+    if (dayLoadingRef.current.has(date)) return
+    dayLoadingRef.current.add(date)
+    setDayLoading(prev => ({ ...prev, [date]: true }))
+    const offset = dayOffsetRef.current[date] ?? 0
+    try {
+      const data = await fetchLibrary(offset, DAY_PAGE_SIZE, date, date)
+      setDayClips(prev => ({ ...prev, [date]: [...(prev[date] ?? []), ...data] }))
+      setDayHasMore(prev => ({ ...prev, [date]: data.length === DAY_PAGE_SIZE }))
+      dayOffsetRef.current[date] = offset + DAY_PAGE_SIZE
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      dayLoadingRef.current.delete(date)
+      setDayLoading(prev => { const n = { ...prev }; delete n[date]; return n })
+    }
+  }, [])
+
+  // Infinite scroll — load more days, then load more clips for last expanded day with more
   const handleListScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget
-    if (el.scrollHeight - el.scrollTop - el.clientHeight < 300) loadMore()
-  }, [loadMore])
+    if (el.scrollHeight - el.scrollTop - el.clientHeight >= 300) return
+    if (!daysLoadingMore && daysHasMore) { loadMoreDays(); return }
+    const expandedWithMore = days.filter(d =>
+      !collapsedDates.has(d.date) && dayHasMore[d.date] && !dayLoadingRef.current.has(d.date)
+    )
+    if (expandedWithMore.length > 0)
+      fetchClipsForDay(expandedWithMore[expandedWithMore.length - 1].date)
+  }, [daysLoadingMore, daysHasMore, loadMoreDays, days, collapsedDates, dayHasMore, fetchClipsForDay])
 
   // Auto-close after successful upload — only if extraction completed while this modal was open
   const prevExtractionStatus = useRef(extractionStatus)
@@ -152,62 +204,54 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
     return () => document.removeEventListener('mousedown', h)
   }, [showDatePicker])
 
-  // Deduplicate into pairs: primary = front, peer = rear
-  const displayItems = useMemo<DisplayItem[]>(() => {
-    const seen = new Set<string>()
-    const clipMap = new Map(clips.map(c => [c.id, c]))
-    const items: DisplayItem[] = []
-
-    for (const clip of clips) {
-      if (seen.has(clip.id)) continue
-      seen.add(clip.id)
-
-      if (clip.peer_clip_id && !seen.has(clip.peer_clip_id)) {
-        const peer = clipMap.get(clip.peer_clip_id)
-        if (peer) {
-          seen.add(peer.id)
-          if (clip.channel === 'front') {
-            items.push({ primary: clip, peer })
-          } else {
-            items.push({ primary: peer, peer: clip })
+  // Per-day deduplicated display items (only for loaded/expanded days)
+  const dayDisplayItems = useMemo<Record<string, DisplayItem[]>>(() => {
+    const result: Record<string, DisplayItem[]> = {}
+    for (const day of days) {
+      const clips = dayClips[day.date] ?? []
+      if (clips.length === 0) { result[day.date] = []; continue }
+      const seen = new Set<string>()
+      const clipMap = new Map(clips.map(c => [c.id, c]))
+      const items: DisplayItem[] = []
+      for (const clip of clips) {
+        if (seen.has(clip.id)) continue
+        seen.add(clip.id)
+        if (clip.peer_clip_id && !seen.has(clip.peer_clip_id)) {
+          const peer = clipMap.get(clip.peer_clip_id)
+          if (peer) {
+            seen.add(peer.id)
+            items.push(clip.channel === 'front' ? { primary: clip, peer } : { primary: peer, peer: clip })
+            continue
           }
-          continue
         }
+        items.push({ primary: clip })
       }
-      items.push({ primary: clip })
+      result[day.date] = items
     }
-    return items
-  }, [clips])
+    return result
+  }, [days, dayClips])
 
-  // Apply channel filter
-  const filteredItems = useMemo(() => {
-    if (channelFilter === 'front') {
-      return displayItems.filter(item => item.primary.channel === 'front')
+  // Channel-filtered per-day items
+  const filteredDayItems = useMemo<Record<string, DisplayItem[]>>(() => {
+    const result: Record<string, DisplayItem[]> = {}
+    for (const [date, items] of Object.entries(dayDisplayItems)) {
+      if (channelFilter === 'front') result[date] = items.filter(i => i.primary.channel === 'front')
+      else if (channelFilter === 'rear') result[date] = items.filter(i => i.primary.channel === 'rear' || !!i.peer)
+      else result[date] = items
     }
-    if (channelFilter === 'rear') {
-      return displayItems.filter(item =>
-        item.primary.channel === 'rear' || (item.peer?.channel === 'rear')
-      )
-    }
-    return displayItems
-  }, [displayItems, channelFilter])
+    return result
+  }, [dayDisplayItems, channelFilter])
 
-  // Group by date, newest first — date filtering is done server-side
-  const grouped = useMemo(() => {
-    const groups: Record<string, DisplayItem[]> = {}
-    for (const item of filteredItems) {
-      const date = item.primary.recorded_at?.slice(0, 10) ?? 'Unknown'
-      if (!groups[date]) groups[date] = []
-      groups[date].push(item)
-    }
-    return Object.entries(groups).sort(([a], [b]) => b.localeCompare(a))
-  }, [filteredItems])
+  // Flat list of all loaded display items (for multi-select)
+  const allDisplayItems = useMemo<DisplayItem[]>(() => {
+    return days.flatMap(d => dayDisplayItems[d.date] ?? [])
+  }, [days, dayDisplayItems])
 
   const itemKey = (item: DisplayItem) => item.primary.session_id ?? item.primary.id
 
   const checkedItems = useMemo(
-    () => displayItems.filter(item => checked.has(itemKey(item))),
-    [checked, displayItems]
+    () => allDisplayItems.filter(item => checked.has(itemKey(item))),
+    [checked, allDisplayItems]
   )
 
   const anySelected = checkedItems.length > 0
@@ -223,16 +267,17 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
   }
 
   const toggleDateCollapse = (date: string) => {
+    const wasCollapsed = collapsedDates.has(date)
     setCollapsedDates(prev => {
       const next = new Set(prev)
-      next.has(date) ? next.delete(date) : next.add(date)
+      wasCollapsed ? next.delete(date) : next.add(date)
       return next
     })
+    if (wasCollapsed && !dayClips[date]) fetchClipsForDay(date)
   }
 
   const selectAll = () => {
-    const allKeys = grouped.flatMap(([, items]) => items).map(item => itemKey(item))
-    setChecked(new Set(allKeys))
+    setChecked(new Set(allDisplayItems.map(item => itemKey(item))))
   }
 
   const toggleDateGroup = (date: string, items: DisplayItem[]) => {
@@ -255,10 +300,10 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
       const allClips: LibraryClip[] = []
       let off = 0
       while (true) {
-        const page = await fetchLibrary(off, PAGE_SIZE, df, dt)
+        const page = await fetchLibrary(off, DAYS_PAGE_SIZE, df, dt)
         allClips.push(...page)
-        if (page.length < PAGE_SIZE) break
-        off += PAGE_SIZE
+        if (page.length < DAYS_PAGE_SIZE) break
+        off += DAYS_PAGE_SIZE
       }
 
       const seen = new Set<string>()
@@ -344,7 +389,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
     finally { setLoadingId(null) }
   }
 
-  // ── Fetch remaining pages into list ─────────────────────────────────────
+  // ── Fetch all remaining days into list ──────────────────────────────────
 
   const handleFetchAll = async () => {
     setLoadingId('fetch-all')
@@ -352,51 +397,24 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
     try {
       const df = dateRange?.from ? fmtParam(dateRange.from) : undefined
       const dt = dateRange?.to   ? fmtParam(dateRange.to)   : df
-      const fetched: LibraryClip[] = []
-      let off = offsetRef.current
+      const fetched: DayEntry[] = []
+      let off = daysOffsetRef.current
       while (true) {
-        const page = await fetchLibrary(off, PAGE_SIZE, df, dt)
+        const page = await fetchDays(off, DAYS_PAGE_SIZE, df, dt)
         fetched.push(...page)
-        if (page.length < PAGE_SIZE) break
-        off += PAGE_SIZE
+        if (page.length < DAYS_PAGE_SIZE) break
+        off += DAYS_PAGE_SIZE
       }
-      setClips(prev => {
-        const existingIds = new Set(prev.map(c => c.id))
-        const newClips = fetched.filter(c => !existingIds.has(c.id))
-        if (!newClips.length) return prev
-        return [...prev, ...newClips].sort((a, b) =>
-          (b.recorded_at ?? '').localeCompare(a.recorded_at ?? '')
-        )
+      setDays(prev => {
+        const existing = new Set(prev.map(d => d.date))
+        return [...prev, ...fetched.filter(d => !existing.has(d.date))]
       })
-      setHasMore(false)
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setLoadingId(null)
-    }
-  }
-
-  const handleFetchDay = async (date: string) => {
-    setLoadingId(`fetch-${date}`)
-    setError(null)
-    try {
-      const dayClips: LibraryClip[] = []
-      let off = 0
-      while (true) {
-        const page = await fetchLibrary(off, PAGE_SIZE, date, date)
-        dayClips.push(...page)
-        if (page.length < PAGE_SIZE) break
-        off += PAGE_SIZE
-      }
-      setClips(prev => {
-        const existingIds = new Set(prev.map(c => c.id))
-        const newClips = dayClips.filter(c => !existingIds.has(c.id))
-        if (!newClips.length) return prev
-        return [...prev, ...newClips].sort((a, b) =>
-          (b.recorded_at ?? '').localeCompare(a.recorded_at ?? '')
-        )
+      setCollapsedDates(prev => {
+        const next = new Set(prev)
+        fetched.forEach(d => next.add(d.date))
+        return next
       })
-      setFullyLoadedDates(prev => new Set(prev).add(date))
+      setDaysHasMore(false)
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -406,7 +424,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
 
   // ── Load as session ───────────────────────────────────────────────────────
 
-  const hasPairedClips = displayItems.some(item => !!item.peer)
+  const hasPairedClips = allDisplayItems.some(item => !!item.peer)
 
   const handleLoadAll = () => {
     const df = dateRange?.from ? fmtParam(dateRange.from) : undefined
@@ -418,7 +436,8 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
     }
   }
 
-  const handleLoadDay = (date: string, items: DisplayItem[]) => {
+  const handleLoadDay = (date: string) => {
+    const items = filteredDayItems[date] ?? []
     if (items.some(item => !!item.peer)) {
       setPendingLoad({ loadingKey: `load-day-${date}`, df: date, dt: date })
     } else {
@@ -486,9 +505,8 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
 
   // ── Render ───────────────────────────────────────────────────────────────
 
-  const totalVisible = grouped.reduce((sum, [, items]) => sum + items.length, 0)
-  // Only the date at the pagination boundary (oldest date in the loaded list) can have incomplete data
-  const boundaryDate = clips.length > 0 ? clips[clips.length - 1].recorded_at?.slice(0, 10) : undefined
+  const totalVisible = Object.values(filteredDayItems).reduce((s, items) => s + items.length, 0)
+  const totalClips = days.reduce((s, d) => s + d.count, 0)
 
   return (
     <div
@@ -537,9 +555,9 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
               </button>
             ))}
           </div>
-          {tab === 'library' && !loading && !error && (
+          {tab === 'library' && !daysLoading && !error && (
             <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--txt3)' }}>
-              {displayItems.length} recording{displayItems.length !== 1 ? 's' : ''}
+              {totalClips} clip{totalClips !== 1 ? 's' : ''}
             </span>
           )}
           <div style={{ flex: 1 }} />
@@ -560,7 +578,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
         </div>
 
         {/* ── Filter bar (library tab only) ── */}
-        {tab === 'library' && !loading && !error && clips.length > 0 && (
+        {tab === 'library' && !daysLoading && !error && days.length > 0 && (
           <div style={{
             padding: '7px 16px',
             borderBottom: '1px solid var(--b1)',
@@ -649,6 +667,10 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
                     .dt-rdp .rdp-selected .rdp-day_button { border-color:transparent }
                     .dt-rdp .rdp-today:not(.rdp-outside):not(.rdp-selected) .rdp-day_button { color:#f5c542 }
                     .dt-rdp .rdp-outside { opacity:.35 }
+                    .dt-rdp .has-rec .rdp-day_button { position:relative }
+                    .dt-rdp .has-rec:not(.rdp-selected):not(.rdp-range_middle):not(.rdp-range_start):not(.rdp-range_end) .rdp-day_button::after {
+                      content:''; position:absolute; bottom:3px; left:50%; transform:translateX(-50%);
+                      width:4px; height:4px; border-radius:50%; background:#f5c542; opacity:.8; }
                   `}</style>
                   <div style={{ display: 'flex' }}>
                     {/* Presets */}
@@ -683,6 +705,8 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
                       onSelect={setDateRange}
                       showOutsideDays
                       weekStartsOn={WEEK_STARTS_ON}
+                      modifiers={{ hasRecording: recordingDates }}
+                      modifiersClassNames={{ hasRecording: 'has-rec' }}
                     />
                   </div>
                 </div>
@@ -703,7 +727,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
             <div style={{ flex: 1 }} />
 
             {/* Showing count */}
-            {(channelFilter !== 'all' || dateRange?.from) && (
+            {(channelFilter !== 'all' || dateRange?.from) && totalVisible > 0 && (
               <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--txt3)' }}>
                 {totalVisible} shown
               </span>
@@ -712,23 +736,23 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
             {/* Select all */}
             <button
               onClick={selectAll}
-              disabled={totalVisible === 0}
+              disabled={allDisplayItems.length === 0}
               style={{
                 fontFamily: 'var(--mono)', fontSize: 10,
                 padding: '3px 9px',
                 background: 'transparent',
                 border: '1px solid var(--b2)',
                 borderRadius: 5, color: 'var(--txt3)',
-                cursor: totalVisible === 0 ? 'default' : 'pointer',
-                opacity: totalVisible === 0 ? 0.4 : 1,
+                cursor: allDisplayItems.length === 0 ? 'default' : 'pointer',
+                opacity: allDisplayItems.length === 0 ? 0.4 : 1,
                 transition: 'all .1s',
               }}
             >
               Select all
             </button>
 
-            {/* Fetch all — only shown when more pages exist */}
-            {hasMore && (
+            {/* Fetch all — only shown when more day pages exist */}
+            {daysHasMore && (
               <button
                 onClick={handleFetchAll}
                 disabled={loadingId === 'fetch-all'}
@@ -778,13 +802,13 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
 
         {/* ── Library tab body ── */}
         {tab === 'library' && <div ref={listRef} onScroll={handleListScroll} style={{ flex: 1, overflowY: 'auto' }}>
-          {loading && (
+          {daysLoading && (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--txt3)', fontFamily: 'var(--mono)', fontSize: 11 }}>
               Loading library…
             </div>
           )}
 
-          {error && !loading && (
+          {error && !daysLoading && (
             <div style={{ padding: 20, color: 'var(--red)', fontFamily: 'var(--mono)', fontSize: 11, lineHeight: 1.9 }}>
               ✗ {error}<br />
               <span style={{ color: 'var(--txt3)', fontSize: 10 }}>
@@ -794,29 +818,25 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
             </div>
           )}
 
-          {!loading && !error && clips.length === 0 && (
+          {!daysLoading && !error && days.length === 0 && (
             <div style={{ padding: 40, textAlign: 'center', color: 'var(--txt3)', fontFamily: 'var(--mono)', fontSize: 11, lineHeight: 2.2 }}>
               {dateRange?.from ? 'No recordings match the selected date range.' : <>No clips indexed yet.<br /><code style={{ color: 'var(--txt2)' }}>-v /footage:/footage</code></>}
             </div>
           )}
 
-          {!loading && !error && clips.length > 0 && totalVisible === 0 && (
-            <div style={{ padding: 40, textAlign: 'center', color: 'var(--txt3)', fontFamily: 'var(--mono)', fontSize: 11 }}>
-              No recordings match the current filter.
-            </div>
-          )}
-
-          {grouped.map(([date, items]) => {
-            const isCollapsed = collapsedDates.has(date)
+          {days.map(day => {
+            const items = filteredDayItems[day.date] ?? []
+            const isCollapsed = collapsedDates.has(day.date)
+            const isLoadingDay = !!dayLoading[day.date]
+            const hasMoreClips = dayHasMore[day.date]
             const groupKeys = items.map(itemKey)
             const checkedCount = groupKeys.filter(k => checked.has(k)).length
-            const allGroupChecked = checkedCount === groupKeys.length
+            const allGroupChecked = groupKeys.length > 0 && checkedCount === groupKeys.length
             const someGroupChecked = checkedCount > 0 && !allGroupChecked
-            const dayFetching = loadingId === `fetch-${date}`
-            const dayLoadingSession = loadingId === `load-day-${date}`
-            const dayFullyLoaded = !hasMore || fullyLoadedDates.has(date) || date !== boundaryDate
+            const dayLoadingSession = loadingId === `load-day-${day.date}`
+
             return (
-              <div key={date}>
+              <div key={day.date}>
                 {/* Date header */}
                 <div
                   style={{
@@ -835,19 +855,21 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
                   <GroupCheckbox
                     checked={allGroupChecked}
                     indeterminate={someGroupChecked}
-                    onChange={() => toggleDateGroup(date, items)}
+                    onChange={() => toggleDateGroup(day.date, items)}
                   />
 
                   {/* Collapse toggle area */}
                   <div
-                    onClick={() => toggleDateCollapse(date)}
+                    onClick={() => toggleDateCollapse(day.date)}
                     style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, cursor: 'pointer', minWidth: 0 }}
                   >
                     <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--txt2)', fontFamily: 'var(--mono)', letterSpacing: '.04em', whiteSpace: 'nowrap' }}>
-                      {formatDate(date)}
+                      {formatDate(day.date)}
                     </span>
                     <span style={{ fontSize: 10, color: 'var(--txt3)', fontFamily: 'var(--mono)', whiteSpace: 'nowrap' }}>
-                      ({items.length})
+                      {isCollapsed
+                        ? `(${day.count})`
+                        : `(${items.length}${hasMoreClips ? '+' : ''})`}
                     </span>
                     <MdExpandMore
                       size={18}
@@ -861,33 +883,11 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
                     />
                   </div>
 
-                  {/* Fetch day — hidden once all clips for that day are in the list */}
-                  {!dayFullyLoaded && (
-                    <button
-                      onClick={e => { e.stopPropagation(); handleFetchDay(date) }}
-                      disabled={dayFetching}
-                      title={`Fetch all clips from ${formatDate(date)} into the list`}
-                      style={{
-                        fontFamily: 'var(--mono)', fontSize: 9,
-                        padding: '2px 7px',
-                        background: 'transparent',
-                        border: '1px solid var(--b2)',
-                        borderRadius: 4, color: 'var(--txt2)',
-                        cursor: dayFetching ? 'wait' : 'pointer',
-                        opacity: dayFetching ? 0.5 : 1,
-                        whiteSpace: 'nowrap', flexShrink: 0,
-                        transition: 'all .1s',
-                      }}
-                    >
-                      {dayFetching ? '…' : 'Fetch day'}
-                    </button>
-                  )}
-
-                  {/* Load day — always visible, loads that day as a session */}
+                  {/* Load day — loads that day as a session */}
                   <button
-                    onClick={e => { e.stopPropagation(); handleLoadDay(date, items) }}
+                    onClick={e => { e.stopPropagation(); handleLoadDay(day.date) }}
                     disabled={dayLoadingSession}
-                    title={`Load all clips from ${formatDate(date)} as a session`}
+                    title={`Load all clips from ${formatDate(day.date)} as a session`}
                     style={{
                       fontFamily: 'var(--mono)', fontSize: 9,
                       padding: '2px 7px',
@@ -904,103 +904,117 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
                   </button>
                 </div>
 
-                {/* Clip rows — hidden when collapsed */}
-                {!isCollapsed && items.map(item => {
-                  const key = itemKey(item)
-                  const isChecked = checked.has(key)
-                  const isRowLoading = loadingId === item.primary.id || loadingId === (item.primary.session_id ?? '__')
-                  const hasBoth = !!item.peer
+                {/* Clip rows — only when expanded */}
+                {!isCollapsed && (
+                  <>
+                    {isLoadingDay && items.length === 0 && (
+                      <div style={{ padding: '10px 16px', color: 'var(--txt3)', fontFamily: 'var(--mono)', fontSize: 10 }}>
+                        Loading…
+                      </div>
+                    )}
+                    {items.map(item => {
+                      const key = itemKey(item)
+                      const isChecked = checked.has(key)
+                      const isRowLoading = loadingId === item.primary.id || loadingId === (item.primary.session_id ?? '__')
+                      const hasBoth = !!item.peer
 
-                  return (
-                    <div key={key} style={{
-                      padding: '9px 16px',
-                      borderBottom: '1px solid var(--b1)',
-                      background: isChecked ? 'var(--acc-dim)' : 'transparent',
-                      transition: 'background .1s',
-                    }}>
-                      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-                        {/* Checkbox */}
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={() => toggleCheck(item)}
-                          style={{
-                            cursor: 'pointer', accentColor: 'var(--acc)',
-                            width: 15, height: 15, flexShrink: 0, marginTop: 2,
-                          }}
-                        />
+                      return (
+                        <div key={key} style={{
+                          padding: '9px 16px',
+                          borderBottom: '1px solid var(--b1)',
+                          background: isChecked ? 'var(--acc-dim)' : 'transparent',
+                          transition: 'background .1s',
+                        }}>
+                          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                            {/* Checkbox */}
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => toggleCheck(item)}
+                              style={{
+                                cursor: 'pointer', accentColor: 'var(--acc)',
+                                width: 15, height: 15, flexShrink: 0, marginTop: 2,
+                              }}
+                            />
 
-                        {/* Content */}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          {/* Top row: time + badges + stats */}
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
-                            {item.primary.recorded_at && (
-                              <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--txt)', fontWeight: 600 }}>
-                                {new Date(item.primary.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                              </span>
-                            )}
-                            {channelFilter !== 'rear' && <ChannelBadge channel={item.primary.channel} />}
-                            {item.peer && channelFilter !== 'front' && <ChannelBadge channel={item.peer.channel} />}
-                            <span style={{ flex: 1 }} />
-                            {item.primary.duration_sec != null && (
-                              <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--txt3)' }}>
-                                {fmtDur(item.primary.duration_sec)}
-                              </span>
-                            )}
-                            {item.primary.max_speed_kmh != null && (
-                              <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--txt2)' }}>
-                                {Math.round(item.primary.max_speed_kmh)} km/h
-                              </span>
-                            )}
-                          </div>
+                            {/* Content */}
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              {/* Top row: time + badges + stats */}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                                {item.primary.recorded_at && (
+                                  <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--txt)', fontWeight: 600 }}>
+                                    {new Date(item.primary.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                                  </span>
+                                )}
+                                {channelFilter !== 'rear' && <ChannelBadge channel={item.primary.channel} />}
+                                {item.peer && channelFilter !== 'front' && <ChannelBadge channel={item.peer.channel} />}
+                                <span style={{ flex: 1 }} />
+                                {item.primary.duration_sec != null && (
+                                  <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--txt3)' }}>
+                                    {fmtDur(item.primary.duration_sec)}
+                                  </span>
+                                )}
+                                {item.primary.max_speed_kmh != null && (
+                                  <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--txt2)' }}>
+                                    {Math.round(item.primary.max_speed_kmh)} km/h
+                                  </span>
+                                )}
+                              </div>
 
-                          {/* Filename */}
-                          <div style={{
-                            fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--txt3)',
-                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                            marginBottom: anySelected ? 0 : 6,
-                          }}>
-                            {item.primary.filename}
-                          </div>
+                              {/* Filename */}
+                              <div style={{
+                                fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--txt3)',
+                                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                marginBottom: anySelected ? 0 : 6,
+                              }}>
+                                {item.primary.filename}
+                              </div>
 
-                          {/* Per-row action buttons — hidden when any checkbox is selected */}
-                          {!anySelected && (
-                            <div style={{ display: 'flex', gap: 5 }}>
-                              {hasBoth && channelFilter === 'all' ? (
-                                <>
-                                  <RowBtn onClick={() => loadSingle(item.primary)} loading={isRowLoading} dim>Front</RowBtn>
-                                  <RowBtn onClick={() => loadSingle(item.peer!)} loading={isRowLoading} dim>Rear</RowBtn>
-                                  <RowBtn onClick={() => loadBoth(item)} loading={isRowLoading}>Load Both</RowBtn>
-                                </>
-                              ) : channelFilter === 'rear' ? (
-                                <RowBtn onClick={() => loadSingle(item.peer ?? item.primary)} loading={isRowLoading}>Load</RowBtn>
-                              ) : (
-                                <RowBtn onClick={() => loadSingle(item.primary)} loading={isRowLoading}>Load</RowBtn>
+                              {/* Per-row action buttons — hidden when any checkbox is selected */}
+                              {!anySelected && (
+                                <div style={{ display: 'flex', gap: 5 }}>
+                                  {hasBoth && channelFilter === 'all' ? (
+                                    <>
+                                      <RowBtn onClick={() => loadSingle(item.primary)} loading={isRowLoading} dim>Front</RowBtn>
+                                      <RowBtn onClick={() => loadSingle(item.peer!)} loading={isRowLoading} dim>Rear</RowBtn>
+                                      <RowBtn onClick={() => loadBoth(item)} loading={isRowLoading}>Load Both</RowBtn>
+                                    </>
+                                  ) : channelFilter === 'rear' ? (
+                                    <RowBtn onClick={() => loadSingle(item.peer ?? item.primary)} loading={isRowLoading}>Load</RowBtn>
+                                  ) : (
+                                    <RowBtn onClick={() => loadSingle(item.primary)} loading={isRowLoading}>Load</RowBtn>
+                                  )}
+                                </div>
                               )}
+                            </div>
+                          </div>
+
+                          {/* Loading progress bar */}
+                          {isRowLoading && (
+                            <div style={{ marginTop: 6, height: 2, background: 'var(--s3)', borderRadius: 1, overflow: 'hidden' }}>
+                              <div style={{
+                                height: '100%',
+                                background: 'linear-gradient(90deg,var(--acc2),var(--acc))',
+                                animation: 'dashtrack-progress 1.4s ease infinite',
+                              }} />
                             </div>
                           )}
                         </div>
+                      )
+                    })}
+                    {isLoadingDay && items.length > 0 && (
+                      <div style={{ padding: '6px 16px', color: 'var(--txt3)', fontFamily: 'var(--mono)', fontSize: 10 }}>
+                        Loading more…
                       </div>
-
-                      {/* Loading progress bar */}
-                      {isRowLoading && (
-                        <div style={{ marginTop: 6, height: 2, background: 'var(--s3)', borderRadius: 1, overflow: 'hidden' }}>
-                          <div style={{
-                            height: '100%',
-                            background: 'linear-gradient(90deg,var(--acc2),var(--acc))',
-                            animation: 'dashtrack-progress 1.4s ease infinite',
-                          }} />
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
+                    )}
+                  </>
+                )}
               </div>
             )
           })}
-          {loadingMore && (
+          {daysLoadingMore && (
             <div style={{ padding: '10px 16px', textAlign: 'center', color: 'var(--txt3)', fontFamily: 'var(--mono)', fontSize: 10 }}>
-              Loading more…
+              Loading more days…
             </div>
           )}
         </div>}
