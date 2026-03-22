@@ -3,6 +3,11 @@
 // for footage URLs so the browser gets proper HTTP 206 Range responses.
 export const FOOTAGE_BASE = import.meta.env.DEV ? 'http://localhost:8080' : ''
 
+export interface DayEntry {
+  date: string  // "YYYY-MM-DD"
+  count: number
+}
+
 export interface LibraryClip {
   id: string
   filename: string
@@ -23,6 +28,20 @@ export interface LibraryClip {
 
 export interface LibraryClipDetail extends LibraryClip {
   gpx: string | null
+}
+
+export async function fetchDays(
+  offset = 0,
+  limit = 100,
+  dateFrom?: string,
+  dateTo?: string,
+): Promise<DayEntry[]> {
+  const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
+  if (dateFrom) params.set('date_from', dateFrom)
+  if (dateTo) params.set('date_to', dateTo)
+  const res = await fetch(`/api/library/days?${params}`)
+  if (!res.ok) throw new Error(`Days fetch failed: ${res.status}`)
+  return res.json()
 }
 
 export async function fetchLibrary(
