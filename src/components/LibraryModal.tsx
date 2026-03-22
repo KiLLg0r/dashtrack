@@ -883,6 +883,28 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
                     />
                   </div>
 
+                  {/* Fetch day — fetches remaining clips for this day */}
+                  {hasMoreClips && (
+                    <button
+                      onClick={e => { e.stopPropagation(); fetchClipsForDay(day.date) }}
+                      disabled={isLoadingDay}
+                      title={`Fetch all remaining clips for ${formatDate(day.date)}`}
+                      style={{
+                        fontFamily: 'var(--mono)', fontSize: 9,
+                        padding: '2px 7px',
+                        background: 'transparent',
+                        border: '1px solid var(--b2)',
+                        borderRadius: 4, color: 'var(--txt2)',
+                        cursor: isLoadingDay ? 'wait' : 'pointer',
+                        opacity: isLoadingDay ? 0.5 : 1,
+                        whiteSpace: 'nowrap', flexShrink: 0,
+                        transition: 'all .1s',
+                      }}
+                    >
+                      {isLoadingDay ? '…' : 'Fetch day'}
+                    </button>
+                  )}
+
                   {/* Load day — loads that day as a session */}
                   <button
                     onClick={e => { e.stopPropagation(); handleLoadDay(day.date) }}
