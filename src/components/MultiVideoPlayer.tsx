@@ -7,6 +7,7 @@ import {
 } from 'react-icons/md'
 import { useStore } from '../store'
 import { fmtTime } from '../hooks/useGPX'
+import { useViewportWidth } from '../hooks/useViewportWidth'
 import VideoChannel from './VideoChannel'
 
 export default function MultiVideoPlayer() {
@@ -29,6 +30,7 @@ export default function MultiVideoPlayer() {
   const [volInput, setVolInput] = useState(String(Math.round(volume * 100)))
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [videoAspectRatio, setVideoAspectRatio] = useState('16/9')
+  const isMobile = useViewportWidth() < 640
 
   // ── Channel/source helpers ─────────────────────────────────────────────────
 
@@ -342,18 +344,32 @@ export default function MultiVideoPlayer() {
     </>
   )
 
+  const mobileTransportBtns = (
+    <>
+      <IconBtn onClick={() => seek(-10)} title="Back 10s" fill><MdReplay10 size={24} /></IconBtn>
+      <IconBtn onClick={() => setPlaying(!playing)} accent title={playing ? 'Pause' : 'Play'} fill>
+        {playing ? <MdPause size={28} /> : <MdPlayArrow size={28} />}
+      </IconBtn>
+      <IconBtn onClick={() => seek(10)} title="Forward 10s" fill><MdForward10 size={24} /></IconBtn>
+    </>
+  )
+
   const speedGroup = speedBtns.map(([rate, label]) => (
     <IconBtn key={rate} onClick={() => setPlaybackRate(rate)} active={playbackRate === rate}>{label}</IconBtn>
   ))
 
-  function applyVolFrac(e: React.MouseEvent<HTMLDivElement>) {
-    const r = e.currentTarget.getBoundingClientRect()
-    const v = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width))
+  const mobileSpeedGroup = speedBtns.map(([rate, label]) => (
+    <IconBtn key={rate} onClick={() => setPlaybackRate(rate)} active={playbackRate === rate} fill>{label}</IconBtn>
+  ))
+
+  function applyVolFrac(clientX: number, el: HTMLElement) {
+    const r = el.getBoundingClientRect()
+    const v = Math.max(0, Math.min(1, (clientX - r.left) / r.width))
     setVolume(v); setMuted(v === 0)
   }
 
   const volumeGroup = (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: (swapped || isSingleChannel || isFullscreen) ? '1 1 0' : undefined, minWidth: 0 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: (swapped || isSingleChannel || isFullscreen || isMobile) ? '1 1 0' : undefined, minWidth: 0 }}>
       <input
         type="number" min={0} max={100} value={volInput}
         onChange={e => setVolInput(e.target.value)}
@@ -367,13 +383,17 @@ export default function MultiVideoPlayer() {
       />
       <style>{`input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}`}</style>
       <div
-        style={{ flex: 1, height: 4, background: 'var(--s3)', borderRadius: 2, cursor: 'pointer', border: '1px solid var(--b2)', position: 'relative', minWidth: swapped ? 60 : 40 }}
-        onMouseDown={e => { volDrag.current = true; applyVolFrac(e) }}
-        onMouseMove={e => { if (volDrag.current) applyVolFrac(e) }}
+        style={{ flex: 1, height: 16, background: 'transparent', borderRadius: 2, cursor: 'pointer', position: 'relative', minWidth: swapped ? 60 : 40, display: 'flex', alignItems: 'center', touchAction: 'none' }}
+        onMouseDown={e => { volDrag.current = true; applyVolFrac(e.clientX, e.currentTarget) }}
+        onMouseMove={e => { if (volDrag.current) applyVolFrac(e.clientX, e.currentTarget) }}
         onMouseUp={() => volDrag.current = false}
         onMouseLeave={() => volDrag.current = false}
+        onTouchStart={e => { volDrag.current = true; applyVolFrac(e.touches[0].clientX, e.currentTarget) }}
+        onTouchMove={e => { if (volDrag.current) applyVolFrac(e.touches[0].clientX, e.currentTarget) }}
+        onTouchEnd={() => volDrag.current = false}
       >
-        <div style={{ height: '100%', background: 'var(--txt2)', borderRadius: 2, width: `${volPct}%`, pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', inset: '6px 0', background: 'var(--s3)', borderRadius: 2, border: '1px solid var(--b2)' }} />
+        <div style={{ position: 'absolute', top: 6, bottom: 6, left: 0, background: 'var(--txt2)', borderRadius: 2, width: `${volPct}%`, pointerEvents: 'none' }} />
         <div style={{ position: 'absolute', top: '50%', transform: 'translate(-50%,-50%)', width: 12, height: 12, background: 'var(--txt)', borderRadius: '50%', border: '2px solid var(--bg)', left: `${volPct}%`, pointerEvents: 'none' }} />
       </div>
       <IconBtn onClick={() => setMuted(!muted)} title="Mute (M)">
@@ -385,14 +405,18 @@ export default function MultiVideoPlayer() {
   const seekBar = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       <div
-        style={{ position: 'relative', height: 4, background: 'var(--s3)', borderRadius: 2, cursor: 'pointer', border: '1px solid var(--b2)' }}
+        style={{ position: 'relative', height: 16, background: 'transparent', borderRadius: 2, cursor: 'pointer', display: 'flex', alignItems: 'center', touchAction: 'none' }}
         onMouseDown={e => { seekDrag.current = true; const r = e.currentTarget.getBoundingClientRect(); seekTo((e.clientX - r.left) / r.width) }}
         onMouseMove={e => { if (!seekDrag.current) return; const r = e.currentTarget.getBoundingClientRect(); seekTo((e.clientX - r.left) / r.width) }}
         onMouseUp={() => seekDrag.current = false}
         onMouseLeave={() => seekDrag.current = false}
+        onTouchStart={e => { seekDrag.current = true; const r = e.currentTarget.getBoundingClientRect(); seekTo((e.touches[0].clientX - r.left) / r.width) }}
+        onTouchMove={e => { if (!seekDrag.current) return; const r = e.currentTarget.getBoundingClientRect(); seekTo((e.touches[0].clientX - r.left) / r.width) }}
+        onTouchEnd={() => seekDrag.current = false}
       >
-        <div style={{ height: '100%', background: 'linear-gradient(90deg,var(--acc2),var(--acc))', borderRadius: 2, width: `${pct}%`, pointerEvents: 'none' }} />
-        <div style={{ position: 'absolute', top: '50%', transform: 'translate(-50%,-50%)', width: 12, height: 12, background: 'var(--acc)', borderRadius: '50%', border: '2px solid var(--bg)', left: `${pct}%`, pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', inset: '6px 0', background: 'var(--s3)', borderRadius: 2, border: '1px solid var(--b2)' }} />
+        <div style={{ position: 'absolute', top: 6, bottom: 6, left: 0, background: 'linear-gradient(90deg,var(--acc2),var(--acc))', borderRadius: 2, width: `${pct}%`, pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', top: '50%', transform: 'translate(-50%,-50%)', width: 14, height: 14, background: 'var(--acc)', borderRadius: '50%', border: '2px solid var(--bg)', left: `${pct}%`, pointerEvents: 'none' }} />
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--txt3)' }}>
         <span style={{ color: 'var(--acc)' }}>{fmtTime(videoTime)}</span>
@@ -441,7 +465,9 @@ export default function MultiVideoPlayer() {
     </IconBtn>
   )
 
-  // Controls layout — unified in fullscreen; split by mode otherwise
+  const hasChannelControls = !isFullscreen && (channelFilterBtns || layoutBtn || pipSwapBtn)
+
+  // Controls layout
   const controls = isFullscreen ? (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
       {transportBtns}
@@ -452,6 +478,35 @@ export default function MultiVideoPlayer() {
       <Sep />
       {fullscreenBtn}
     </div>
+  ) : isMobile ? (
+    // ── Mobile: stacked rows ─────────────────────────────────────────────
+    <>
+      {/* Row 1: seek bar (video timeline) */}
+      {seekBar}
+      {/* Row 2: transport buttons — full width */}
+      <div style={{ display: 'flex' }}>
+        {mobileTransportBtns}
+      </div>
+      {/* Row 3: speed buttons + fullscreen — full width */}
+      <div style={{ display: 'flex' }}>
+        {mobileSpeedGroup}
+        <IconBtn onClick={toggleFullscreen} title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'} fill>
+          {isFullscreen ? <MdFullscreenExit size={20} /> : <MdFullscreen size={20} />}
+        </IconBtn>
+      </div>
+      {/* Row 4: volume */}
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        {volumeGroup}
+      </div>
+      {/* Row 5: channels (only when dual-channel) */}
+      {hasChannelControls && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {channelFilterBtns}
+          {layoutBtn && <><Sep />{layoutBtn}</>}
+          {pipSwapBtn && <><Sep />{pipSwapBtn}</>}
+        </div>
+      )}
+    </>
   ) : swapped ? (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
       {transportBtns}
@@ -512,9 +567,9 @@ export default function MultiVideoPlayer() {
         background: isFullscreen ? 'rgba(0,0,0,.85)' : 'var(--s2)',
         borderBottom: isFullscreen ? 'none' : '1px solid var(--b2)',
         padding: swapped || isFullscreen ? '8px 14px' : '10px 12px',
-        display: 'flex', flexDirection: 'column', gap: 8,
+        display: 'flex', flexDirection: 'column', gap: isMobile ? 14 : 8,
       }}>
-        {seekBar}
+        {!isMobile && seekBar}
         {controls}
       </div>
     </div>

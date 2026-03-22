@@ -4,7 +4,8 @@ import App from './App'
 
 const style = document.createElement('style')
 style.textContent = `
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;user-select:none}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;user-select:none;-webkit-tap-highlight-color:transparent}
+button,div[role=button],[onClick]{touch-action:manipulation}
 :root{
   --bg:#09090c;--s1:#0f1116;--s2:#141820;--s3:#1c2232;
   --b1:rgba(255,255,255,0.05);--b2:rgba(255,255,255,0.10);--b3:rgba(255,255,255,0.18);
