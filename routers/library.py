@@ -196,7 +196,7 @@ async def list_days(
     with Session(get_engine()) as sess:
         stmt = select(
             func.date(Clip.recorded_at).label("day"),
-            func.count(Clip.id).label("cnt"),
+            func.count(func.distinct(func.coalesce(Clip.session_id, Clip.id))).label("cnt"),
         ).where(Clip.status == status)
         if date_from:
             try:
