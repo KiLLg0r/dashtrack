@@ -44,10 +44,11 @@ jobs: dict[str, dict] = {}
 async def lifespan(app: FastAPI):
     asyncio.create_task(_cleanup_loop())
     try:
-        from scanner import scan_footage_dir, watch_footage_dir
+        from scanner import periodic_rescan, scan_footage_dir, watch_footage_dir
 
         asyncio.create_task(scan_footage_dir())
         asyncio.create_task(watch_footage_dir())
+        asyncio.create_task(periodic_rescan())
     except Exception as e:
         logging.warning("Library scanner unavailable: %s", e)
     yield

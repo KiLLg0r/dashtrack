@@ -22,6 +22,15 @@ logger = logging.getLogger(__name__)
 FOOTAGE_DIR = Path(os.getenv("FOOTAGE_DIR", "/dashtrack/footage"))
 GPX_CACHE_DIR = Path(os.getenv("GPX_DIR", "/dashtrack/gpx"))
 
+# Periodic re-scan interval (seconds). inotify-based watching does not receive
+# events for files written by another host over NFS/SMB, so we also re-scan the
+# directory on a timer as a fallback. Set to 0 to disable. Default 5 minutes.
+RESCAN_INTERVAL_SEC = int(os.getenv("RESCAN_INTERVAL_SEC", "300"))
+
+# Force watchfiles into polling mode instead of inotify. Required for the
+# live watcher to notice changes on network filesystems (NFS/SMB) at all.
+WATCH_FORCE_POLLING = os.getenv("WATCH_FORCE_POLLING", "").lower() in ("1", "true", "yes")
+
 
 def parse_viofo_filename(filename: str) -> dict:
     """
@@ -159,8 +168,12 @@ async def watch_footage_dir() -> None:
     try:
         from watchfiles import Change, awatch
 
-        logger.info("Watching %s for new footage", FOOTAGE_DIR)
-        async for changes in awatch(str(FOOTAGE_DIR)):
+        logger.info(
+            "Watching %s for new footage%s",
+            FOOTAGE_DIR,
+            " (polling mode)" if WATCH_FORCE_POLLING else "",
+        )
+        async for changes in awatch(str(FOOTAGE_DIR), force_polling=WATCH_FORCE_POLLING):
             for change_type, path_str in changes:
                 path = Path(path_str)
                 if path.suffix.upper() == ".MP4" and change_type in (Change.added, Change.modified):
@@ -168,3 +181,23 @@ async def watch_footage_dir() -> None:
                     await index_file(path)
     except Exception as e:
         logger.error("File watcher error: %s", e)
+
+
+async def periodic_rescan() -> None:
+    """Re-scan FOOTAGE_DIR on a timer as a fallback for filesystems where
+    inotify events don't fire (NFS/SMB mounts written by another host).
+
+    Only files not already indexed are extracted, so a rescan of an
+    unchanged directory is cheap (one directory walk + DB lookup).
+    """
+    if RESCAN_INTERVAL_SEC <= 0:
+        logger.info("Periodic re-scan disabled (RESCAN_INTERVAL_SEC=%d)", RESCAN_INTERVAL_SEC)
+        return
+
+    logger.info("Periodic re-scan every %d seconds", RESCAN_INTERVAL_SEC)
+    while True:
+        await asyncio.sleep(RESCAN_INTERVAL_SEC)
+        try:
+            await scan_footage_dir()
+        except Exception as e:
+            logger.error("Periodic re-scan error: %s", e)
