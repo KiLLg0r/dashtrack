@@ -14,3 +14,9 @@ services:
       DATA_DIR: /dashtrack/data
       GPX_DIR: /dashtrack/gpx
       VITE_MAPBOX_TOKEN: ${VITE_MAPBOX_TOKEN}
+      # Re-scan the footage dir every N seconds (fallback for NFS/SMB mounts
+      # where inotify events don't fire). Set to 0 to disable. Default 300.
+      RESCAN_INTERVAL_SEC: 300
+      # Set to "true" to force the live watcher into polling mode, needed for
+      # near-real-time detection on network filesystems. Default off.
+      # WATCH_FORCE_POLLING: "true"
