@@ -1,0 +1,52 @@
+name: 🔧 Improvement
+description: Refine something that already exists (UX, performance, code quality, defaults)
+title: "[Improvement]: "
+labels: ["improvement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for refinements to existing behavior — performance, UX polish, refactors, better defaults.
+        For a brand-new capability, use *Feature request* instead.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and this isn't a duplicate
+          required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area?
+      options:
+        - GPS extraction
+        - Map / route rendering
+        - Video player / sync
+        - Library / indexing
+        - Multi-segment session
+        - Upload flow
+        - UI / layout
+        - Build / tooling / CI
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: Current behavior / limitation
+      description: What exists today and why it's not ideal.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested improvement
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+    validations:
+      required: false

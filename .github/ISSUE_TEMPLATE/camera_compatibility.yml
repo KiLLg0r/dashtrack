@@ -1,0 +1,82 @@
+name: 📷 Camera / GPS compatibility
+description: No GPS, wrong coordinates, or wrong speed extracted from your footage
+title: "[Camera]: "
+labels: ["compatibility"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        DashTrack reads `freeGPS` binary blocks embedded in Viofo (Novatek) MP4 files. Other brands
+        and firmware revisions lay these blocks out differently, so extraction can fail or return
+        wrong values. The details below help add support for your camera.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight
+      options:
+        - label: I searched existing issues and this isn't a duplicate
+          required: true
+        - label: The footage plays fine and was recorded with GPS enabled
+          required: false
+  - type: input
+    id: camera
+    attributes:
+      label: Camera model
+      placeholder: e.g. Viofo A229 Plus, A139, WM1 — or another brand
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware version
+      placeholder: e.g. V2.6
+    validations:
+      required: false
+  - type: dropdown
+    id: symptom
+    attributes:
+      label: What's wrong?
+      options:
+        - No GPS points extracted at all
+        - Coordinates are wrong / off-location
+        - Speed is wrong or always zero
+        - Bearing / altitude is wrong
+        - Timestamps / sync are off
+        - Other (describe below)
+    validations:
+      required: true
+  - type: input
+    id: filename
+    attributes:
+      label: Example filename
+      description: The raw filename from the SD card — helps confirm the naming scheme.
+      placeholder: e.g. 2026_0314_114143_025729F.MP4
+    validations:
+      required: false
+  - type: textarea
+    id: details
+    attributes:
+      label: What happened
+      description: The result you got versus what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: hexdump
+    attributes:
+      label: freeGPS block hex dump
+      description: |
+        Optional but very helpful — lets the binary layout be inspected directly:
+        ```
+        grep -aboe 'freeGPS' YOUR_FILE.MP4 | head -1   # find the byte offset
+        xxd -s <offset> -l 128 YOUR_FILE.MP4
+        ```
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: sample
+    attributes:
+      label: Sample footage
+      options:
+        - label: I can provide a short sample clip (with GPS) if requested
+          required: false

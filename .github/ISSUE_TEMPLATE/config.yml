@@ -1,0 +1,3 @@
+# Funnel new issues through the templates below for cleaner triage.
+# Flip to `true` if you want to allow free-form blank issues again.
+blank_issues_enabled: false
