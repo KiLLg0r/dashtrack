@@ -1,13 +1,14 @@
 import { useStore } from '../store'
+import { cvtSpeed, speedUnit } from '../units'
 
 const DIRS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
 
 export default function Hud() {
-  const { points, currentIdx } = useStore()
+  const { points, currentIdx, units } = useStore()
   const p = points[currentIdx]
   if (!p) return null
 
-  const spd = Math.round(p.speed)
+  const spd = Math.round(cvtSpeed(p.speed, units))
   const brg = p.bearing
   const moving = spd > 1
   const dir = DIRS[Math.round(brg / 45) % 8]
@@ -16,7 +17,7 @@ export default function Hud() {
     <div className="hud">
       <div className="hud-speed">
         <span className="hud-num">{spd}</span>
-        <span className="hud-unit">km/h</span>
+        <span className="hud-unit">{speedUnit(units)}</span>
       </div>
       <div className="hud-divider" />
       <div className="hud-comp">

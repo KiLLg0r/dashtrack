@@ -17,7 +17,7 @@ export function parseGPX(xml: string): GPSPoint[] {
       lat,
       lon,
       alt:      ele  ? parseFloat(ele)  : null,
-      speed:    se   ? parseFloat(se.textContent ?? '0') * 3.6 : 0,
+      speed:    se   ? parseFloat(se.textContent ?? '0') : 0,  // GPX speed is m/s — kept as-is
       videoSec: ve   ? parseFloat(ve.textContent ?? '0') : 0,
       bearing:  be   ? parseFloat(be.textContent ?? '0') : 0,
       time:     te   ? new Date(te.textContent ?? '') : null,

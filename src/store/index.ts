@@ -2,11 +2,12 @@ import { create } from 'zustand'
 import type { LibraryClip, LibraryClipDetail } from '../api/library'
 import { FOOTAGE_BASE } from '../api/library'
 import { parseGPX } from '../hooks/useGPX'
+import type { Units } from '../units'
 
 export interface GPSPoint {
   lat: number
   lon: number
-  speed: number      // km/h
+  speed: number      // m/s (canonical — converted to km/h or mph at render)
   bearing: number    // degrees
   alt: number | null
   videoSec: number
@@ -94,6 +95,10 @@ interface DashState {
   // App mode
   appMode: AppMode
   setAppMode: (m: AppMode) => void
+
+  // Display units
+  units: Units
+  setUnits: (u: Units) => void
 
   // Library
   libraryClips: LibraryClip[]
@@ -183,6 +188,11 @@ export const useStore = create<DashState>((set, get) => ({
 
   appMode: 'upload',
   setAppMode: (m) => set({ appMode: m }),
+
+  // Saved choice wins; otherwise the server default (UNITS env) is
+  // applied at startup in App.tsx without persisting it.
+  units: localStorage.getItem('dashtrack:units') === 'imperial' ? 'imperial' : 'metric',
+  setUnits: (u) => { localStorage.setItem('dashtrack:units', u); set({ units: u }) },
 
   libraryClips: [],
   libraryLoading: false,

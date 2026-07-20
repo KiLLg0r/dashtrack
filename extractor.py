@@ -46,11 +46,15 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
+# Exact by definition: 1 knot = 1852 m per 3600 s
+KNOTS_TO_MPS = 1852 / 3600
+
+
 @dataclass
 class GPSPoint:
     lat: float
     lon: float
-    speed_kmh: float
+    speed_mps: float  # metres/second — canonical unit throughout the app
     bearing: float
     alt: float | None
     video_sec: float
@@ -93,7 +97,7 @@ def _parse_block(data: bytes, offset: int) -> GPSPoint | None:
         return GPSPoint(
             lat=round(lat, 7),
             lon=round(lon, 7),
-            speed_kmh=round(speed_kn * 1.852, 2),
+            speed_mps=round(speed_kn * KNOTS_TO_MPS, 3),
             bearing=round(bearing, 1),
             alt=alt,
             video_sec=0.0,  # set by caller
@@ -143,7 +147,7 @@ def extract_points(path: str) -> Generator[GPSPoint, None, None]:
                     block_index += 1
                     pos = idx + 8
                     continue
-                if point.speed_kmh == 0 and dist > 50:
+                if point.speed_mps == 0 and dist > 50:
                     block_index += 1
                     pos = idx + 8
                     continue
@@ -174,7 +178,7 @@ def points_to_gpx(points: list[GPSPoint], source_name: str = "dashcam") -> str:
         lines.append(f'      <trkpt lat="{p.lat:.7f}" lon="{p.lon:.7f}">')
         if p.alt is not None:
             lines.append(f"        <ele>{p.alt}</ele>")
-        lines.append(f"        <speed>{round(p.speed_kmh / 3.6, 3)}</speed>")
+        lines.append(f"        <speed>{p.speed_mps}</speed>")
         lines.append("        <extensions>")
         lines.append(f"          <video_sec>{p.video_sec}</video_sec>")
         lines.append(f"          <bearing>{p.bearing}</bearing>")

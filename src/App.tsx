@@ -20,7 +20,18 @@ export default function App() {
   const {
     swapped, setSwapped, multiSession, points, reset,
     followCar, setFollowCar, mapStyle, setMapStyle,
+    units, setUnits,
   } = useStore()
+
+  // Apply the server-side default (UNITS env) unless the user has picked
+  // units themselves — setState directly so the default isn't persisted.
+  useEffect(() => {
+    if (localStorage.getItem('dashtrack:units')) return
+    fetch('/api/config')
+      .then(r => r.json())
+      .then(cfg => { if (cfg.units === 'imperial') useStore.setState({ units: 'imperial' }) })
+      .catch(() => {})
+  }, [])
 
   const [libraryOpen, setLibraryOpen] = useState(false)
   const [libraryInitialTab, setLibraryInitialTab] = useState<'library' | 'upload'>('library')
@@ -169,6 +180,12 @@ export default function App() {
                     {mapStyles.map(([k, l]) => (
                       <button key={k} className={mapStyle === k ? 'on' : ''} onClick={() => setMapStyle(k)}>{l}</button>
                     ))}
+                  </div>
+                )}
+                {!isMobile && (
+                  <div className="seg">
+                    <button className={units === 'metric' ? 'on' : ''} onClick={() => setUnits('metric')}>km/h</button>
+                    <button className={units === 'imperial' ? 'on' : ''} onClick={() => setUnits('imperial')}>mph</button>
                   </div>
                 )}
                 <button className="pill" onClick={() => setStage(s => s === 'map' ? 'video' : 'map')} title="Swap map / video">

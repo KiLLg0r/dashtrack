@@ -75,7 +75,11 @@ async def health():
 # ── CLIENT CONFIG (runtime secrets) ──────────────────────────
 @app.get("/api/config")
 async def config():
-    return {"mapboxToken": os.getenv("VITE_MAPBOX_TOKEN", "")}
+    units = os.getenv("UNITS", "metric").strip().lower()
+    return {
+        "mapboxToken": os.getenv("VITE_MAPBOX_TOKEN", ""),
+        "units": "imperial" if units in ("imperial", "mph", "miles") else "metric",
+    }
 
 
 # ── START EXTRACTION JOB ──────────────────────────────────────
@@ -163,7 +167,7 @@ async def ws_extract(websocket: WebSocket, job_id: str):
                         "stats": {
                             "points": len(pts),
                             "duration_sec": pts[-1].video_sec if pts else 0,
-                            "max_speed_kmh": round(max((p.speed_kmh for p in pts), default=0), 1),
+                            "max_speed_mps": max((p.speed_mps for p in pts), default=0),
                         },
                     }
                 )

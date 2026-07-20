@@ -74,7 +74,7 @@ def apply_gps_metadata(clip: Clip, points: list[GPSPoint], gpx_path: Path) -> No
     """Populate a Clip's GPS metadata fields from extracted points."""
     lats = [p.lat for p in points]
     lons = [p.lon for p in points]
-    speeds = [p.speed_kmh for p in points if p.speed_kmh > 0]
+    speeds = [p.speed_mps for p in points if p.speed_mps > 0]
 
     clip.status = "indexed"
     clip.gpx_path = str(gpx_path)
@@ -84,7 +84,7 @@ def apply_gps_metadata(clip: Clip, points: list[GPSPoint], gpx_path: Path) -> No
     clip.lat_max = max(lats)
     clip.lon_min = min(lons)
     clip.lon_max = max(lons)
-    clip.max_speed_kmh = round(max(speeds), 1) if speeds else None
+    clip.max_speed_mps = max(speeds) if speeds else None
     clip.indexed_at = datetime.utcnow()
 
 
