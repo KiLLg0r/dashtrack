@@ -7,6 +7,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+from sqlalchemy import text
 from sqlmodel import Field, SQLModel, create_engine
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "/dashtrack/data"))
@@ -25,7 +26,7 @@ class Clip(SQLModel, table=True):
     lat_max: float | None = None
     lon_min: float | None = None
     lon_max: float | None = None
-    max_speed_kmh: float | None = None
+    max_speed_mps: float | None = None  # metres/second (canonical)
     point_count: int | None = None
     gpx_path: str | None = None  # absolute path to cached .gpx file
     indexed_at: datetime | None = None
@@ -51,4 +52,16 @@ def get_engine():
             connect_args={"check_same_thread": False},
         )
         SQLModel.metadata.create_all(_engine)
+        _migrate(_engine)
     return _engine
+
+
+def _migrate(engine) -> None:
+    """In-place schema migrations for databases created by older versions."""
+    with engine.connect() as conn:
+        cols = [row[1] for row in conn.execute(text("PRAGMA table_info(clip)"))]
+        # v2: speeds stored in m/s instead of km/h
+        if "max_speed_kmh" in cols:
+            conn.execute(text("ALTER TABLE clip RENAME COLUMN max_speed_kmh TO max_speed_mps"))
+            conn.execute(text("UPDATE clip SET max_speed_mps = max_speed_mps / 3.6"))
+            conn.commit()

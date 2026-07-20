@@ -1,9 +1,10 @@
 import { useMemo } from 'react'
 import { useStore } from '../store'
 import { totalDistance, fmtDuration } from '../hooks/useGPX'
+import { cvtSpeed, speedUnit, fmtDist, fmtDistParts } from '../units'
 
 export default function StatsTile() {
-  const { points, currentIdx, multiSession, videoDuration } = useStore()
+  const { points, currentIdx, multiSession, videoDuration, units } = useStore()
 
   const stats = useMemo(() => {
     if (!points.length) return null
@@ -26,8 +27,6 @@ export default function StatsTile() {
 
   const frac = points.length > 1 ? currentIdx / (points.length - 1) : 0
   const covered = stats.dist * frac
-  const fmtDist = (m: number) => m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`
-  const fmtDistParts = (m: number): [string, string] => m >= 1000 ? [(m / 1000).toFixed(1), 'km'] : [String(Math.round(m)), 'm']
   const fmtDur = (s: number) => {
     if (s <= 0) return '—'
     const h = Math.floor(s / 3600)
@@ -36,11 +35,11 @@ export default function StatsTile() {
     return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`
   }
 
-  const [distVal, distUnit] = fmtDistParts(stats.dist)
+  const [distVal, distUnit] = fmtDistParts(stats.dist, units)
   const cells: [string, string, string][] = [
     ['Distance', distVal, distUnit],
-    ['Max', String(stats.maxSpd), 'km/h'],
-    ['Average', String(stats.avgSpd), 'km/h'],
+    ['Max', String(Math.round(cvtSpeed(stats.maxSpd, units))), speedUnit(units)],
+    ['Average', String(Math.round(cvtSpeed(stats.avgSpd, units))), speedUnit(units)],
     ['Duration', stats.dur > 0 ? fmtDur(stats.dur) : (fmtDuration(0) || '—'), ''],
     ['GPS fix', String(stats.fixRate), '%'],
     ['Points', String(stats.pts), ''],
@@ -59,7 +58,7 @@ export default function StatsTile() {
       </div>
       <div className="prog-row">
         <div className="prog-bar"><div className="prog-fill" style={{ width: (frac * 100).toFixed(1) + '%' }} /></div>
-        <div className="prog-text mono">{Math.round(frac * 100)}% · {fmtDist(covered)}</div>
+        <div className="prog-text mono">{Math.round(frac * 100)}% · {fmtDist(covered, units)}</div>
       </div>
     </div>
   )

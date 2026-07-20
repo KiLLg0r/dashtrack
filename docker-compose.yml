@@ -20,3 +20,6 @@ services:
       # Set to "true" to force the live watcher into polling mode, needed for
       # near-real-time detection on network filesystems. Default off.
       # WATCH_FORCE_POLLING: "true"
+      # Default display units: "metric" (km/h) or "imperial" (mph). Users can
+      # still override in the UI; their choice is saved in the browser.
+      # UNITS: imperial

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MdErrorOutline } from 'react-icons/md'
 import { useStore } from '../store'
 import { fetchLibrary, fetchClip, fetchSession, LibraryClip } from '../api/library'
+import { cvtSpeed, speedUnit } from '../units'
 
 const PAGE_SIZE = 100
 
@@ -217,8 +218,9 @@ interface ClipRowProps {
 }
 
 function ClipRow({ primary, peer, selected, peerSelected, loading, selectionMode, onLoadSingle, onLoadPeer, onLoadSession, onSelectPeer }: ClipRowProps) {
+  const units = useStore(s => s.units)
   const dur = primary.duration_sec ? fmtDur(primary.duration_sec) : '—'
-  const spd = primary.max_speed_kmh ? `${Math.round(primary.max_speed_kmh)} km/h` : '—'
+  const spd = primary.max_speed_mps ? `${Math.round(cvtSpeed(primary.max_speed_mps, units))} ${speedUnit(units)}` : '—'
   const time = primary.recorded_at
     ? new Date(primary.recorded_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     : null
@@ -241,7 +243,7 @@ function ClipRow({ primary, peer, selected, peerSelected, loading, selectionMode
         {peer && <ChannelBadge channel={peer.channel} />}
         <span style={{ flex: 1 }} />
         <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--txt3)' }}>{dur}</span>
-        {primary.max_speed_kmh && (
+        {primary.max_speed_mps && (
           <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--txt2)' }}>{spd}</span>
         )}
       </div>

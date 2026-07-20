@@ -41,7 +41,7 @@ class ClipResponse(BaseModel):
     lat_max: float | None
     lon_min: float | None
     lon_max: float | None
-    max_speed_kmh: float | None
+    max_speed_mps: float | None
     point_count: int | None
     status: str
     peer_clip_id: str | None = None
@@ -67,7 +67,7 @@ def _to_response(clip: Clip, peer_id: str | None = None) -> ClipResponse:
         lat_max=clip.lat_max,
         lon_min=clip.lon_min,
         lon_max=clip.lon_max,
-        max_speed_kmh=clip.max_speed_kmh,
+        max_speed_mps=clip.max_speed_mps,
         point_count=clip.point_count,
         status=clip.status,
         peer_clip_id=peer_id,

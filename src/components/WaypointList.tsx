@@ -1,8 +1,9 @@
 import { useMemo, useRef, useEffect } from 'react'
 import { useStore } from '../store'
+import { cvtSpeed } from '../units'
 
 export default function WaypointList() {
-  const { points, currentIdx } = useStore()
+  const { points, currentIdx, units } = useStore()
   const scrollRef = useRef<HTMLDivElement>(null)
   const userScrolled = useRef(false)
 
@@ -66,7 +67,7 @@ export default function WaypointList() {
                 {p.time ? p.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : `pt ${it.i}`}
               </span>
               <span className="wp-coord mono">{p.lat.toFixed(4)}, {p.lon.toFixed(4)}</span>
-              <span className="wp-spd mono">{p.speed > 0 ? String(Math.round(p.speed)) : '·'}</span>
+              <span className="wp-spd mono">{p.speed > 0 ? String(Math.round(cvtSpeed(p.speed, units))) : '·'}</span>
             </div>
           )
         })}

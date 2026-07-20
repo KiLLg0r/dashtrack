@@ -1,8 +1,9 @@
 import { useMemo } from 'react'
 import { useStore } from '../store'
+import { cvtSpeed, speedUnit } from '../units'
 
 export default function SpeedGraph() {
-  const { points, currentIdx } = useStore()
+  const { points, currentIdx, units } = useStore()
 
   const geom = useMemo(() => {
     if (!points.length) return null
@@ -40,12 +41,12 @@ export default function SpeedGraph() {
     <div className="tile graphtile">
       <div className="tile-head">
         <span className="tile-title">Speed</span>
-        <span className="tile-meta mono">{Math.round(curS)} km/h</span>
+        <span className="tile-meta mono">{Math.round(cvtSpeed(curS, units))} {speedUnit(units)}</span>
       </div>
       <div className="graph-wrap">
         <div className="graph-axis mono">
-          <span>{geom.maxS}</span>
-          <span>{Math.round(geom.maxS / 2)}</span>
+          <span>{Math.round(cvtSpeed(geom.maxS, units))}</span>
+          <span>{Math.round(cvtSpeed(geom.maxS, units) / 2)}</span>
           <span>0</span>
         </div>
         <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="spdsvg" onClick={seek}>

@@ -20,7 +20,7 @@ export interface LibraryClip {
   lat_max: number | null
   lon_min: number | null
   lon_max: number | null
-  max_speed_kmh: number | null
+  max_speed_mps: number | null
   point_count: number | null
   status: string
   peer_clip_id: string | null

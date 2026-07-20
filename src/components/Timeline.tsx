@@ -1,9 +1,10 @@
 import { useMemo, useRef, useEffect } from 'react'
 import { useStore, GPSPoint } from '../store'
 import { totalDistance, fmtDuration } from '../hooks/useGPX'
+import { cvtSpeed, speedUnit, fmtDist } from '../units'
 
 export default function Timeline() {
-  const { points, currentIdx, extractionStatus, multiSession } = useStore()
+  const { points, currentIdx, extractionStatus, multiSession, units } = useStore()
   const activeRef       = useRef<HTMLDivElement>(null)
   const scrollRef       = useRef<HTMLDivElement>(null)
   const isAutoScrolling = useRef(false)
@@ -55,12 +56,12 @@ export default function Timeline() {
       ? fmtDuration(points[points.length - 1].time!.getTime() - points[0].time!.getTime())
       : null
     return {
-      dist: dist > 1000 ? `${(dist / 1000).toFixed(1)} km` : `${Math.round(dist)} m`,
-      maxSpd: maxSpd ? `${maxSpd} km/h` : '—',
+      dist: fmtDist(dist, units),
+      maxSpd: maxSpd ? `${Math.round(cvtSpeed(maxSpd, units))} ${speedUnit(units)}` : '—',
       pts: points.length,
       dur: dur ?? (multiSession ? `${multiSession.clips.length} clips` : '—'),
     }
-  }, [points, multiSession])
+  }, [points, multiSession, units])
 
   // Track manual scroll — suppress auto-scroll until user explicitly clicks a waypoint
   useEffect(() => {
@@ -177,7 +178,7 @@ export default function Timeline() {
                     {p.lat.toFixed(5)}, {p.lon.toFixed(5)}
                   </span>
                   <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--txt2)' }}>
-                    {p.speed > 0 ? `${Math.round(p.speed)}km/h` : ''}
+                    {p.speed > 0 ? `${Math.round(cvtSpeed(p.speed, units))}${speedUnit(units)}` : ''}
                   </span>
                 </div>
               )

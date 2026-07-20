@@ -3,6 +3,7 @@ import { useStore } from '../store'
 import type { SessionClip } from '../store'
 import { fetchLibrary, fetchDays, fetchClip, fetchClipBatch, fetchSession, fetchMinitrack, LibraryClip, DayEntry, FOOTAGE_BASE } from '../api/library'
 import { parseGPX } from '../hooks/useGPX'
+import { cvtSpeed, speedUnit } from '../units'
 import Icon from './Icon'
 
 type ChannelFilter = 'all' | 'front' | 'rear'
@@ -93,7 +94,7 @@ function MiniRoute({ clipId }: { clipId: string }) {
 
 // ── LibraryModal ──────────────────────────────────────────────────────────────
 export default function LibraryModal({ onClose, initialTab = 'library', checked, setChecked }: Props) {
-  const { loadLibraryClip, loadSession, buildMultiSession } = useStore()
+  const { loadLibraryClip, loadSession, buildMultiSession, units } = useStore()
   const [tab, setTab] = useState<'library' | 'upload'>(initialTab)
 
   // ── Pagination state ──
@@ -420,7 +421,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
                                   {item.peer && <span className="badge badge--r">REAR</span>}
                                 </div>
                                 <div className="clip-stats mono">
-                                  {item.primary.max_speed_kmh != null && `${Math.round(item.primary.max_speed_kmh)} km/h`}
+                                  {item.primary.max_speed_mps != null && `${Math.round(cvtSpeed(item.primary.max_speed_mps, units))} ${speedUnit(units)}`}
                                   {item.primary.duration_sec != null && ` · ${fmtDur(item.primary.duration_sec)}`}
                                 </div>
                               </div>
