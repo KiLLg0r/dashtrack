@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MdErrorOutline } from 'react-icons/md'
 import { useStore } from '../store'
 import { fetchLibrary, fetchClip, fetchSession, LibraryClip } from '../api/library'
+import { byChannel, channelColor, channelLabel, channelShort } from '../channels'
 import { cvtSpeed, speedUnit } from '../units'
 
 const PAGE_SIZE = 100
@@ -61,30 +62,27 @@ export default function LibraryView({ selectionMode = false, selectedIds = new S
     return () => observer.disconnect()
   }, [loadMore])
 
-  // Deduplicate session pairs — show front+rear as a single display item
+  // Group a session's channels (front / interior / rear) into one display item,
+  // preserving first-appearance order and canonical channel order within a card.
   const displayItems = useMemo(() => {
-    const seen = new Set<string>()
-    const clipMap = new Map(clips.map(c => [c.id, c]))
-    const items: { primary: LibraryClip; peer?: LibraryClip }[] = []
-
+    const bySession = new Map<string, LibraryClip[]>()
     for (const clip of clips) {
-      if (seen.has(clip.id)) continue
-      seen.add(clip.id)
-
-      if (clip.peer_clip_id && !seen.has(clip.peer_clip_id)) {
-        const peer = clipMap.get(clip.peer_clip_id)
-        if (peer) {
-          seen.add(peer.id)
-          // Always put front first
-          if (clip.channel === 'front') {
-            items.push({ primary: clip, peer })
-          } else {
-            items.push({ primary: peer ?? clip, peer: peer ? clip : undefined })
-          }
-          continue
-        }
+      if (!clip.session_id) continue
+      const g = bySession.get(clip.session_id)
+      if (g) g.push(clip)
+      else bySession.set(clip.session_id, [clip])
+    }
+    const emitted = new Set<string>()
+    const items: { primary: LibraryClip; peers: LibraryClip[] }[] = []
+    for (const clip of clips) {
+      if (clip.session_id) {
+        if (emitted.has(clip.session_id)) continue
+        emitted.add(clip.session_id)
+        const group = [...(bySession.get(clip.session_id) ?? [clip])].sort(byChannel(c => c.channel))
+        items.push({ primary: group[0], peers: group.slice(1) })
+      } else {
+        items.push({ primary: clip, peers: [] })
       }
-      items.push({ primary: clip })
     }
     return items
   }, [clips])
@@ -163,28 +161,24 @@ export default function LibraryView({ selectionMode = false, selectedIds = new S
             {formatDate(date)}
           </div>
 
-          {items.map(({ primary, peer }) => {
-            const isPrimarySelected = selectedIds.has(primary.id)
-            const isPeerSelected = peer ? selectedIds.has(peer.id) : false
+          {items.map(({ primary, peers }) => {
+            const allClips = [primary, ...peers]
             const isLoading = loadingId === primary.id || loadingId === (primary.session_id ?? '')
-            const hasSession = !!primary.session_id && !!peer
+            const hasSession = !!primary.session_id && peers.length > 0
 
             return (
               <ClipRow
                 key={primary.id}
-                primary={primary}
-                peer={peer}
-                selected={isPrimarySelected}
-                peerSelected={isPeerSelected}
+                clips={allClips}
+                selectedIds={selectedIds}
                 loading={isLoading}
                 selectionMode={selectionMode}
-                onLoadSingle={() => handleLoad(primary)}
-                onLoadPeer={peer && !selectionMode ? () => handleLoad(peer) : undefined}
+                onLoadClip={c => handleLoad(c)}
                 onLoadSession={hasSession && !selectionMode
                   ? () => handleLoadSession(primary.session_id!, primary.id)
                   : undefined
                 }
-                onSelectPeer={peer && selectionMode ? () => onSelect?.(peer) : undefined}
+                onSelectClip={c => onSelect?.(c)}
               />
             )
           })}
@@ -205,20 +199,20 @@ export default function LibraryView({ selectionMode = false, selectedIds = new S
 // ── ClipRow ───────────────────────────────────────────────────
 
 interface ClipRowProps {
-  primary: LibraryClip
-  peer?: LibraryClip
-  selected: boolean       // primary is selected
-  peerSelected?: boolean  // peer is selected
+  clips: LibraryClip[]              // [primary, ...peers] in canonical order
+  selectedIds: Set<string>
   loading: boolean
   selectionMode: boolean
-  onLoadSingle: () => void
-  onLoadPeer?: () => void
+  onLoadClip: (clip: LibraryClip) => void
   onLoadSession?: () => void
-  onSelectPeer?: () => void
+  onSelectClip: (clip: LibraryClip) => void
 }
 
-function ClipRow({ primary, peer, selected, peerSelected, loading, selectionMode, onLoadSingle, onLoadPeer, onLoadSession, onSelectPeer }: ClipRowProps) {
+function ClipRow({ clips, selectedIds, loading, selectionMode, onLoadClip, onLoadSession, onSelectClip }: ClipRowProps) {
   const units = useStore(s => s.units)
+  const primary = clips[0]
+  const hasSession = clips.length > 1
+  const anySelected = clips.some(c => selectedIds.has(c.id))
   const dur = primary.duration_sec ? fmtDur(primary.duration_sec) : '—'
   const spd = primary.max_speed_mps ? `${Math.round(cvtSpeed(primary.max_speed_mps, units))} ${speedUnit(units)}` : '—'
   const time = primary.recorded_at
@@ -229,7 +223,7 @@ function ClipRow({ primary, peer, selected, peerSelected, loading, selectionMode
     <div style={{
       padding: '7px 12px',
       borderBottom: '1px solid var(--b1)',
-      background: (selected || peerSelected) ? 'var(--acc-dim)' : 'transparent',
+      background: anySelected ? 'var(--acc-dim)' : 'transparent',
       transition: 'background .1s',
     }}>
       {/* Top row: time + channel badges + duration */}
@@ -239,8 +233,7 @@ function ClipRow({ primary, peer, selected, peerSelected, loading, selectionMode
             {time}
           </span>
         )}
-        <ChannelBadge channel={primary.channel} />
-        {peer && <ChannelBadge channel={peer.channel} />}
+        {clips.map(c => <ChannelBadge key={c.id} channel={c.channel} />)}
         <span style={{ flex: 1 }} />
         <span style={{ fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--txt3)' }}>{dur}</span>
         {primary.max_speed_mps && (
@@ -258,33 +251,36 @@ function ClipRow({ primary, peer, selected, peerSelected, loading, selectionMode
 
       {/* Action buttons */}
       {!selectionMode && (
-        <div style={{ display: 'flex', gap: 5 }}>
-          {onLoadSession ? (
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+          {hasSession ? (
             <>
-              <ActionBtn onClick={onLoadSingle} loading={loading} dim>Front</ActionBtn>
-              <ActionBtn onClick={onLoadPeer ?? (() => {})} loading={loading} dim>Rear</ActionBtn>
-              <ActionBtn onClick={onLoadSession} loading={loading}>Load Both</ActionBtn>
+              {clips.map(c => (
+                <ActionBtn key={c.id} onClick={() => onLoadClip(c)} loading={loading} dim>
+                  {channelLabel(c.channel)}
+                </ActionBtn>
+              ))}
+              {onLoadSession && <ActionBtn onClick={onLoadSession} loading={loading}>Load all</ActionBtn>}
             </>
           ) : (
-            <ActionBtn onClick={onLoadSingle} loading={loading}>Load</ActionBtn>
+            <ActionBtn onClick={() => onLoadClip(primary)} loading={loading}>Load</ActionBtn>
           )}
         </div>
       )}
 
       {selectionMode && (
-        <div style={{ display: 'flex', gap: 5 }}>
-          {peer ? (
-            <>
-              <ActionBtn onClick={onLoadSingle} loading={false} active={selected}>
-                {selected ? '✓ F' : '+ F'}
-              </ActionBtn>
-              <ActionBtn onClick={() => onSelectPeer?.()} loading={false} active={!!peerSelected}>
-                {peerSelected ? '✓ R' : '+ R'}
-              </ActionBtn>
-            </>
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+          {hasSession ? (
+            clips.map(c => {
+              const sel = selectedIds.has(c.id)
+              return (
+                <ActionBtn key={c.id} onClick={() => onSelectClip(c)} loading={false} active={sel}>
+                  {sel ? '✓ ' : '+ '}{channelShort(c.channel)}
+                </ActionBtn>
+              )
+            })
           ) : (
-            <ActionBtn onClick={onLoadSingle} loading={false} active={selected}>
-              {selected ? '✓ Selected' : '+ Add to session'}
+            <ActionBtn onClick={() => onSelectClip(primary)} loading={false} active={selectedIds.has(primary.id)}>
+              {selectedIds.has(primary.id) ? '✓ Selected' : '+ Add to session'}
             </ActionBtn>
           )}
         </div>
@@ -303,14 +299,14 @@ function ClipRow({ primary, peer, selected, peerSelected, loading, selectionMode
 }
 
 function ChannelBadge({ channel }: { channel: string }) {
-  const color = channel === 'front' ? 'var(--acc)' : channel === 'rear' ? '#4da6ff' : 'var(--txt3)'
+  const color = channelColor(channel)
   return (
     <span style={{
       fontFamily: 'var(--mono)', fontSize: 9, fontWeight: 700,
       color, border: `1px solid ${color}`, borderRadius: 3,
       padding: '1px 4px', opacity: 0.9, letterSpacing: '.05em',
     }}>
-      {channel === 'front' ? 'F' : channel === 'rear' ? 'R' : '?'}
+      {channelShort(channel)}
     </span>
   )
 }

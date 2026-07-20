@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import type { LibraryClip, LibraryClipDetail } from '../api/library'
 import { FOOTAGE_BASE } from '../api/library'
+import { byChannel, channelLabel } from '../channels'
+import type { ChannelId } from '../channels'
 import { parseGPX } from '../hooks/useGPX'
 import type { Units } from '../units'
 
@@ -18,25 +20,31 @@ export type ExtractionStatus = 'idle' | 'uploading' | 'extracting' | 'done' | 'e
 export type MapStyle = 'standard-satellite' | 'dark-v11' | 'light-v11'
 export type AppMode = 'upload' | 'library'
 export type VideoLayout = 'single' | 'side-by-side' | 'pip'
-export type ChannelFilter = 'all' | 'front' | 'rear'
+export type ChannelFilter = 'all' | 'front' | 'interior' | 'rear'
 
 // ── Multi-channel ──────────────────────────────────────────────
 export interface Channel {
-  id: string           // 'front' | 'rear' | 'upload'
+  id: string           // channel id: 'front' | 'interior' | 'rear' | 'upload'
   clipId: string | null
   videoUrl: string | null
   videoDuration: number
   label: string
 }
 
+// One synchronized peer channel of a segment (interior/rear alongside front).
+export interface PeerVideo {
+  channel: string       // channel id the URL belongs to
+  videoUrl: string      // /api/footage/{clipId}
+}
+
 // ── Multi-segment session ──────────────────────────────────────
 export interface SessionClip {
   clipId: string
-  channel: 'front' | 'rear' | 'unknown'
+  channel: ChannelId      // the segment's primary channel (usually 'front')
   trimStart: number       // seconds into original clip
   trimEnd: number         // seconds into original clip
   videoUrl: string        // /api/footage/{clipId}
-  peerVideoUrl?: string   // opposite channel URL (rear when primary is front, or vice versa)
+  peerVideoUrls?: PeerVideo[]  // the other channels recorded with this clip
   gpxPoints: GPSPoint[]   // trimmed GPS points
   videoOffset: number     // cumulative playback seconds before this clip
   color: string           // segment color on map
@@ -218,7 +226,7 @@ export const useStore = create<DashState>((set, get) => ({
         clipId: clip.id,
         videoUrl: `${FOOTAGE_BASE}/api/footage/${clip.id}`,
         videoDuration: clip.duration_sec ?? 0,
-        label: clip.channel === 'front' ? 'FRONT' : clip.channel === 'rear' ? 'REAR' : 'VIDEO',
+        label: channelLabel(clip.channel),
       }],
       primaryChannelId: clip.channel,
       multiSession: null,
@@ -236,8 +244,10 @@ export const useStore = create<DashState>((set, get) => ({
   setVideoLayout: (l) => set({ videoLayout: l }),
   setChannelFilter: (f) => set({ channelFilter: f }),
 
-  loadSession: (clips) => {
-    // GPS always from front channel; fall back to first clip
+  loadSession: (rawClips) => {
+    // Canonical channel order so the player renders front, interior, rear.
+    const clips = [...rawClips].sort(byChannel(c => c.channel))
+    // GPS always from the front channel; fall back to the first clip.
     const gpsClip = clips.find(c => c.channel === 'front') ?? clips[0]
     const pts = gpsClip?.gpx ? parseGPX(gpsClip.gpx) : []
     const channels: Channel[] = clips.map(c => ({
@@ -245,7 +255,7 @@ export const useStore = create<DashState>((set, get) => ({
       clipId: c.id,
       videoUrl: `${FOOTAGE_BASE}/api/footage/${c.id}`,
       videoDuration: c.duration_sec ?? 0,
-      label: c.channel === 'front' ? 'FRONT' : c.channel === 'rear' ? 'REAR' : 'VIDEO',
+      label: channelLabel(c.channel),
     }))
     const primaryId = clips.find(c => c.channel === 'front')?.channel ?? clips[0]?.channel ?? 'front'
     set({
@@ -296,25 +306,26 @@ export const useStore = create<DashState>((set, get) => ({
       totalDuration: videoOffset,
     }
 
-    // Set up channels from first clip (front + rear if peer exists)
+    // Set up channels from the first clip: its own channel plus any peers,
+    // ordered canonically (front, interior, rear).
     const firstClip = coloredClips[0]
-    const peerChannelId = firstClip.channel === 'front' ? 'rear' : 'front'
+    const dur = firstClip.trimEnd - firstClip.trimStart
     const channels: Channel[] = [
       {
         id: firstClip.channel,
         clipId: firstClip.clipId,
         videoUrl: firstClip.videoUrl,
-        videoDuration: firstClip.trimEnd - firstClip.trimStart,
-        label: firstClip.channel === 'front' ? 'FRONT' : firstClip.channel === 'rear' ? 'REAR' : 'VIDEO',
+        videoDuration: dur,
+        label: channelLabel(firstClip.channel),
       },
-      ...(firstClip.peerVideoUrl ? [{
-        id: peerChannelId,
+      ...(firstClip.peerVideoUrls ?? []).map(pv => ({
+        id: pv.channel,
         clipId: null as null,
-        videoUrl: firstClip.peerVideoUrl,
-        videoDuration: firstClip.trimEnd - firstClip.trimStart,
-        label: peerChannelId === 'front' ? 'FRONT' : 'REAR',
-      }] : []),
-    ]
+        videoUrl: pv.videoUrl,
+        videoDuration: dur,
+        label: channelLabel(pv.channel),
+      })),
+    ].sort(byChannel(c => c.id))
 
     set({
       points: allPoints,

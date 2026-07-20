@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../store'
 import type { SessionClip } from '../store'
 import { fetchLibrary, fetchDays, fetchClip, fetchClipBatch, fetchSession, fetchMinitrack, LibraryClip, DayEntry, FOOTAGE_BASE } from '../api/library'
+import { byChannel, channelBadgeClass, channelLabel } from '../channels'
 import { parseGPX } from '../hooks/useGPX'
 import { cvtSpeed, speedUnit } from '../units'
 import Icon from './Icon'
 
-type ChannelFilter = 'all' | 'front' | 'rear'
-type DisplayItem = { primary: LibraryClip; peer?: LibraryClip }
+type ChannelFilter = 'all' | 'front' | 'interior' | 'rear'
+type DisplayItem = { primary: LibraryClip; peers: LibraryClip[] }
 
 interface Props {
   onClose: () => void
@@ -205,18 +206,27 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
     for (const day of days) {
       const clips = dayClips[day.date] ?? []
       if (!clips.length) { result[day.date] = []; continue }
-      const seen = new Set<string>(); const clipMap = new Map(clips.map(c => [c.id, c])); const items: DisplayItem[] = []
+      // Group each session's channels (front / interior / rear) into one card.
+      const bySession = new Map<string, LibraryClip[]>()
       for (const clip of clips) {
-        if (seen.has(clip.id)) continue; seen.add(clip.id)
-        if (clip.peer_clip_id && !seen.has(clip.peer_clip_id)) {
-          const peer = clipMap.get(clip.peer_clip_id)
-          if (peer) { seen.add(peer.id); items.push(clip.channel === 'front' ? { primary: clip, peer } : { primary: peer, peer: clip }); continue }
-        }
-        items.push({ primary: clip })
+        if (!clip.session_id) continue
+        const g = bySession.get(clip.session_id)
+        if (g) g.push(clip); else bySession.set(clip.session_id, [clip])
       }
-      result[day.date] = channelFilter === 'front' ? items.filter(i => i.primary.channel === 'front')
-        : channelFilter === 'rear' ? items.filter(i => i.primary.channel === 'rear' || !!i.peer)
-        : items
+      const emitted = new Set<string>(); const items: DisplayItem[] = []
+      for (const clip of clips) {
+        if (clip.session_id) {
+          if (emitted.has(clip.session_id)) continue
+          emitted.add(clip.session_id)
+          const group = [...(bySession.get(clip.session_id) ?? [clip])].sort(byChannel(c => c.channel))
+          items.push({ primary: group[0], peers: group.slice(1) })
+        } else {
+          items.push({ primary: clip, peers: [] })
+        }
+      }
+      result[day.date] = channelFilter === 'all'
+        ? items
+        : items.filter(i => [i.primary, ...i.peers].some(c => c.channel === channelFilter))
     }
     return result
   }, [days, dayClips, channelFilter])
@@ -256,15 +266,15 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
     catch (e: any) { setError(e.message) } finally { setLoadingId(null) }
   }
 
-  const loadBoth = async (item: DisplayItem) => {
-    if (!item.peer || !item.primary.session_id) { loadSingle(item.primary); return }
+  const loadItem = async (item: DisplayItem) => {
+    if (!item.peers.length || !item.primary.session_id) { loadSingle(item.primary); return }
     setLoadingId(item.primary.id)
     try { const sc = await fetchSession(item.primary.session_id); loadSession(sc); onClose() }
     catch (e: any) { setError(e.message) } finally { setLoadingId(null) }
   }
 
   const handleMultiLoad = async () => {
-    if (checkedItems.length === 1) { loadBoth(checkedItems[0]); return }
+    if (checkedItems.length === 1) { loadItem(checkedItems[0]); return }
     const sorted = [...checkedItems].sort((a, b) => (a.primary.recorded_at ?? '').localeCompare(b.primary.recorded_at ?? ''))
     setLoadingId('multi')
     try {
@@ -277,7 +287,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
         sessionClips.push({
           clipId: item.primary.id, channel: item.primary.channel, trimStart: 0, trimEnd: dur,
           videoUrl: `${FOOTAGE_BASE}/api/footage/${item.primary.id}`,
-          peerVideoUrl: item.peer ? `${FOOTAGE_BASE}/api/footage/${item.peer.id}` : undefined,
+          peerVideoUrls: item.peers.map(p => ({ channel: p.channel, videoUrl: `${FOOTAGE_BASE}/api/footage/${p.id}` })),
           gpxPoints: detail.gpx ? parseGPX(detail.gpx) : [], videoOffset: 0, color: '',
           filename: item.primary.filename, recordedAt: item.primary.recorded_at,
         })
@@ -348,7 +358,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
               </div>
               <div className="lib-group-label">Channel</div>
               <div className="seg">
-                {([['all', 'All'], ['front', 'Front'], ['rear', 'Rear']] as const).map(([k, l]) => (
+                {([['all', 'All'], ['front', 'Front'], ['interior', 'Interior'], ['rear', 'Rear']] as const).map(([k, l]) => (
                   <button key={k} className={channelFilter === k ? 'on' : ''} onClick={() => setChannelFilter(k as ChannelFilter)}>{l}</button>
                 ))}
               </div>
@@ -403,7 +413,7 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
                           const key = itemKey(item)
                           const isChecked = checked.has(key)
                           return (
-                            <div key={key} className={`clipcard ${isChecked ? 'checked' : ''}`} onClick={() => loadBoth(item)}>
+                            <div key={key} className={`clipcard ${isChecked ? 'checked' : ''}`} onClick={() => loadItem(item)}>
                               <label className="clip-check" onClick={e => e.stopPropagation()}>
                                 <input type="checkbox" checked={isChecked} onChange={() => toggleCheck(item)} />
                               </label>
@@ -417,8 +427,9 @@ export default function LibraryModal({ onClose, initialTab = 'library', checked,
                                     : '—'}
                                 </div>
                                 <div className="clip-badges">
-                                  <span className="badge badge--f">FRONT</span>
-                                  {item.peer && <span className="badge badge--r">REAR</span>}
+                                  {[item.primary, ...item.peers].map(c => (
+                                    <span key={c.id} className={`badge ${channelBadgeClass(c.channel)}`}>{channelLabel(c.channel)}</span>
+                                  ))}
                                 </div>
                                 <div className="clip-stats mono">
                                   {item.primary.max_speed_mps != null && `${Math.round(cvtSpeed(item.primary.max_speed_mps, units))} ${speedUnit(units)}`}

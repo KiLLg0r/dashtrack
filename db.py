@@ -17,8 +17,9 @@ class Clip(SQLModel, table=True):
     id: str = Field(primary_key=True)  # sha256(path)[:16]
     path: str = Field(unique=True, index=True)  # absolute path on server
     filename: str
-    channel: str = "unknown"  # 'front' | 'rear' | 'unknown'
-    session_id: str | None = None  # '2026_0314_114143' groups F+R pairs
+    channel: str = "unknown"  # 'front' | 'rear' | 'interior' | 'unknown'
+    provider: str | None = None  # source camera provider id, e.g. 'viofo'
+    session_id: str | None = None  # '2026_0314_114143' groups F/R/I channels
     recorded_at: datetime | None = None  # parsed from filename
     duration_sec: float | None = None
     size_bytes: int = 0
@@ -64,4 +65,9 @@ def _migrate(engine) -> None:
         if "max_speed_kmh" in cols:
             conn.execute(text("ALTER TABLE clip RENAME COLUMN max_speed_kmh TO max_speed_mps"))
             conn.execute(text("UPDATE clip SET max_speed_mps = max_speed_mps / 3.6"))
+            conn.commit()
+        # v3: track which camera provider indexed each clip
+        if "provider" not in cols:
+            conn.execute(text("ALTER TABLE clip ADD COLUMN provider VARCHAR"))
+            conn.execute(text("UPDATE clip SET provider = 'viofo' WHERE provider IS NULL"))
             conn.commit()

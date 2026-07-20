@@ -1,6 +1,6 @@
 # DashTrack
 
-A dashcam GPS visualization tool for **Viofo cameras**. Upload an MP4 directly from your SD card — or point it at a footage directory and let DashTrack auto-index everything. GPS data is extracted from the file's embedded binary blocks and displayed on a satellite map, synced frame-accurately to video playback. No external tools, no OCR, no GPS app required.
+A dashcam GPS visualization tool for **Viofo cameras**. Upload an MP4 directly from your SD card — or point it at a footage directory and let DashTrack auto-index everything. GPS data is extracted from the file's embedded binary blocks and displayed on a satellite map, synced frame-accurately to video playback. No external tools, no OCR, no GPS app required. Built on a pluggable **provider** architecture — Viofo today, open to more brands (see [Extending to other dashcams](#extending-to-other-dashcams)).
 
 ![Tech Stack](https://img.shields.io/badge/React-18-blue) ![FastAPI](https://img.shields.io/badge/FastAPI-Python_3.12-green) ![Mapbox](https://img.shields.io/badge/Map-Mapbox_GL_v3-blue) ![Docker](https://img.shields.io/badge/Docker-multi--stage-blue)
 
@@ -31,8 +31,8 @@ The extracted data is output as a GPX file with a custom `<video_sec>` extension
 
 - **Binary GPS extraction** — reads `freeGPS` blocks directly from Viofo MP4 files, no FFmpeg needed
 - **Auto-indexing library** — mount a footage directory and DashTrack indexes all MP4s on startup, watching for new files in real time
-- **Library browser** — calendar date picker, date presets, day grouping, channel filtering (front/rear/all)
-- **Multi-channel video** — synchronized front + rear playback in side-by-side or picture-in-picture layout
+- **Library browser** — calendar date picker, date presets, day grouping, channel filtering (front/interior/rear)
+- **Multi-channel video** — synchronized front / interior / rear playback (up to 3 channels) in side-by-side or picture-in-picture layout, click a PiP thumbnail to focus it
 - **Multi-segment route builder** — select clips from different days, trim start/end, reorder, and compose into a single continuous route
 - **Frame-accurate map sync** — the car marker on the map moves in sync with video playback
 - **Satellite map** — Mapbox GL JS v3, switchable between satellite+streets and dark vector
@@ -89,7 +89,7 @@ npm run dev
 2. Open the app — clips are indexed automatically in the background
 3. Click the library icon to open the browser
 4. Filter by date, channel, or use the calendar picker to find a recording
-5. Load a single clip, a front+rear session pair, or select multiple clips to build a multi-segment route
+5. Load a single clip, a full session (front / interior / rear), or select multiple clips to build a multi-segment route
 
 ### Upload mode (one-off files)
 
@@ -99,19 +99,6 @@ npm run dev
 4. Once done, load the same `.MP4` into the video player and press play
 
 > **Note:** The video is played locally in your browser via `createObjectURL` — it is never stored server-side in upload mode.
-
----
-
-## Merging clips with FFmpeg
-
-Viofo saves footage in ~3-minute segments. To merge them while preserving the embedded GPS blocks:
-
-```bash
-ls -1v *.MP4 | sed "s/^/file '/" | sed "s/$/'/" > filelist.txt
-ffmpeg -f concat -safe 0 -i filelist.txt -map 0 -c copy merged.MP4
-```
-
-> The `-map 0` flag is critical — without it FFmpeg drops the GPS data streams.
 
 ---
 
@@ -144,7 +131,7 @@ WS   /api/ws/extract/{job_id}        Progress stream:
 GET  /api/library                    List indexed clips (pagination + date filter)
 GET  /api/library/days               Distinct recording days with clip counts
 POST /api/library/batch              Batch fetch metadata + GPX for multiple clips
-GET  /api/library/session/{id}       All clips in a session (front + rear) with GPX
+GET  /api/library/session/{id}       All clips in a session (front/interior/rear) with GPX
 GET  /api/library/{clip_id}          Single clip metadata + GPX
 GET  /api/footage/{clip_id}          Stream MP4 with HTTP 206 range request support
 
@@ -162,13 +149,17 @@ dashtrack-single/
 ├── requirements.txt
 ├── package.json
 ├── main.py                 # FastAPI app: SPA serving + API routes + lifespan
-├── extractor.py            # Viofo freeGPS binary parser
+├── extractor.py            # Viofo freeGPS binary decoder
 ├── db.py                   # SQLModel models + SQLite setup
-├── scanner.py              # Footage directory watcher + auto-indexer
+├── scanner.py              # Footage directory watcher + auto-indexer (provider-driven)
+├── providers/              # Camera provider abstraction (add new brands here)
+│   ├── base.py             #   Provider interface + ClipMeta
+│   └── viofo.py            #   Viofo freeGPS provider (reference implementation)
 └── routers/
 │   └── library.py          # Library + footage streaming API routes
 └── src/
     ├── App.tsx             # Root layout, keyboard shortcuts, mode routing
+    ├── channels.ts         # Channel model (front / interior / rear helpers)
     ├── store/index.ts      # Zustand global state
     ├── hooks/
     │   ├── useGPX.ts       # GPX parser, haversine distance, helpers
@@ -188,9 +179,24 @@ dashtrack-single/
 
 ---
 
+## Extending to other dashcams
+
+DashTrack currently supports **Viofo** cameras (Novatek `freeGPS` format), but it's built to grow. Everything camera-specific — recognizing a file, parsing its channel/session naming, and decoding its embedded GPS — lives behind a small **provider** interface (`providers/base.py`). Everything downstream (the SQLite index, the REST API, and the entire UI) is brand-agnostic.
+
+Adding support for another manufacturer (BlackVue, Garmin, Thinkware, 70mai, …) means implementing one `Provider` subclass and registering it in `providers/__init__.py` — no database, API, or frontend changes required. See `providers/viofo.py` for a reference implementation.
+
+**I'd love help here.** If your dashcam isn't supported and you're willing to share a sample clip or help work out its GPS format:
+
+- Open a [camera compatibility issue](../../issues/new?template=camera_compatibility.yml) with your camera model and a sample file, or
+- Send a PR adding a provider.
+
+Contributions, GPS-format notes, and test footage are all very welcome.
+
+---
+
 ## Known limitations
 
 - **Altitude is always 0.0** — the A229 Plus firmware doesn't write altitude data
 - **No authentication** — designed for local use only
-- **Viofo-specific** — only tested with Novatek NT96660-based cameras; other brands use different GPS block formats
+- **Viofo only (for now)** — only the Viofo `freeGPS` / Novatek format is implemented; other brands need a provider ([contributions welcome](#extending-to-other-dashcams))
 - **No seamless clip transitions** — multi-segment playback swaps `video.src` at clip boundaries rather than using MSE
