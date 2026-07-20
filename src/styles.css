@@ -13,6 +13,16 @@
   --shadow:0 18px 50px -12px rgba(0,0,0,.7), 0 4px 14px -6px rgba(0,0,0,.6);
 
   --pad:16px; --gap:11px; --tile-w:344px; --radius:16px;
+
+  /* Compatibility aliases — some inline component styles still use the
+     project's earlier token names. Map them onto the current palette so those
+     styles render as intended instead of silently falling back to invalid
+     values. Prefer the canonical tokens above in new code. */
+  --acc:var(--accent); --acc2:#c99b10; --acc-dim:rgba(var(--accent-rgb),.1);
+  --mono:var(--font-mono); --ui:var(--font-display);
+  --s1:#0f1116; --s2:#141820; --s3:#1c2232;
+  --b1:rgba(255,255,255,.05); --b2:rgba(255,255,255,.1); --b3:rgba(255,255,255,.18);
+  --r:8px;
 }
 
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -218,10 +228,11 @@ button{font-family:inherit;color:inherit;border:none;background:none;cursor:poin
 .clip-thumb{width:84px;height:54px;border-radius:8px;overflow:hidden;flex-shrink:0;background:#0a0d13;border:1px solid var(--hair)}
 .clip-meta{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
 .clip-time{font-size:13px;color:var(--txt)}
-.clip-badges{display:flex;gap:4px}
+.clip-badges{display:flex;gap:4px;flex-wrap:wrap}
 .badge{font-size:8.5px;font-weight:700;letter-spacing:.08em;padding:1.5px 5px;border-radius:4px}
 .badge--f{background:rgba(var(--accent-rgb),.18);color:var(--accent)}
 .badge--r{background:rgba(46,230,166,.16);color:var(--grn)}
+.badge--i{background:rgba(192,132,252,.18);color:#c084fc}
 .clip-stats{font-size:10px;color:var(--txt3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .clip-load{font-size:11px;color:var(--txt3);flex-shrink:0;opacity:0;transition:.13s;display:inline-flex;align-items:center;gap:2px}
 .clipcard:hover .clip-load{opacity:1;color:var(--accent)}

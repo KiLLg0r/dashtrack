@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { MdErrorOutline, MdArrowUpward, MdArrowDownward, MdClose } from 'react-icons/md'
 import { useStore, SessionClip } from '../store'
 import { fetchClip, fetchClipBatch, LibraryClip, FOOTAGE_BASE } from '../api/library'
+import { byChannel } from '../channels'
 import LibraryView from './LibraryView'
 import { parseGPX, fmtTime } from '../hooks/useGPX'
 
@@ -60,25 +61,28 @@ export default function SessionBuilder() {
     setError(null)
 
     try {
-      const clipById = new Map(selectedClips.map(c => [c.id, c]))
       const processed = new Set<string>()
 
-      // Resolve pairs and determine which primary IDs need fetching
-      type PairEntry = { primary: LibraryClip; secondary: LibraryClip | null }
-      const pairs: PairEntry[] = []
+      // Group selected clips by session (front / interior / rear → one segment).
+      const bySession = new Map<string, LibraryClip[]>()
       for (const clip of selectedClips) {
-        if (processed.has(clip.id)) continue
-        const peerClipEntry = clip.peer_clip_id ? clipById.get(clip.peer_clip_id) : undefined
-        let primary = clip
-        let secondary = peerClipEntry ?? null
-        if (secondary && clip.channel === 'rear') { primary = secondary; secondary = clip }
-        if (secondary) processed.add(secondary.id)
-        processed.add(primary.id)
-        pairs.push({ primary, secondary })
+        const key = clip.session_id ?? clip.id
+        const g = bySession.get(key)
+        if (g) g.push(clip)
+        else bySession.set(key, [clip])
+      }
+      type Group = { primary: LibraryClip; secondaries: LibraryClip[] }
+      const groups: Group[] = []
+      for (const clip of selectedClips) {
+        const key = clip.session_id ?? clip.id
+        if (processed.has(key)) continue
+        processed.add(key)
+        const members = [...(bySession.get(key) ?? [clip])].sort(byChannel(c => c.channel))
+        groups.push({ primary: members[0], secondaries: members.slice(1) })
       }
 
       // Batch fetch only the clips not already in local cache
-      const missing = pairs.map(p => p.primary.id).filter(id => !clipDetails.has(id))
+      const missing = groups.map(g => g.primary.id).filter(id => !clipDetails.has(id))
       if (missing.length) {
         const fetched = await fetchClipBatch(missing)
         const newDetails = new Map(clipDetails)
@@ -89,7 +93,7 @@ export default function SessionBuilder() {
       }
 
       const sessionClips: SessionClip[] = []
-      for (const { primary, secondary } of pairs) {
+      for (const { primary, secondaries } of groups) {
         const detail = clipDetails.get(primary.id) ?? { duration: 0, gpx: null }
         const [trimStart, trimEnd] = trims.get(primary.id) ?? [0, detail.duration]
         const allPoints = detail.gpx ? parseGPX(detail.gpx) : []
@@ -100,7 +104,7 @@ export default function SessionBuilder() {
           trimStart,
           trimEnd,
           videoUrl: `${FOOTAGE_BASE}/api/footage/${primary.id}`,
-          peerVideoUrl: secondary ? `${FOOTAGE_BASE}/api/footage/${secondary.id}` : undefined,
+          peerVideoUrls: secondaries.map(s => ({ channel: s.channel, videoUrl: `${FOOTAGE_BASE}/api/footage/${s.id}` })),
           gpxPoints,
           videoOffset: 0,
           color: '',

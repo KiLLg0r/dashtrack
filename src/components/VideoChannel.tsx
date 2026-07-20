@@ -1,4 +1,5 @@
 import { forwardRef } from 'react'
+import { channelColor } from '../channels'
 
 interface Props {
   videoUrl: string
@@ -8,6 +9,7 @@ interface Props {
   fillHeight?: boolean
   aspectRatio?: string
   containerStyle?: React.CSSProperties
+  onSelect?: () => void
   onTimeUpdate?: React.ReactEventHandler<HTMLVideoElement>
   onLoadedMetadata?: React.ReactEventHandler<HTMLVideoElement>
   onPlay?: React.ReactEventHandler<HTMLVideoElement>
@@ -20,6 +22,7 @@ const VideoChannel = forwardRef<HTMLVideoElement, Props>(({
   fillHeight = false,
   aspectRatio = '16/9',
   containerStyle,
+  onSelect,
   onTimeUpdate, onLoadedMetadata, onPlay, onPause, onEnded,
 }, ref) => {
   const videoStyle: React.CSSProperties = fillHeight
@@ -27,13 +30,16 @@ const VideoChannel = forwardRef<HTMLVideoElement, Props>(({
     : { width: '100%', display: 'block', aspectRatio, background: '#000' }
 
   return (
-    <div style={{
-      position: 'relative',
-      flex: '0 0 auto',
-      minWidth: 0,
-      background: '#000',
-      ...containerStyle,
-    }}>
+    <div
+      onClick={onSelect ? (e) => { e.stopPropagation(); onSelect() } : undefined}
+      style={{
+        position: 'relative',
+        flex: '0 0 auto',
+        minWidth: 0,
+        background: '#000',
+        cursor: onSelect ? 'pointer' : undefined,
+        ...containerStyle,
+      }}>
       <video
         ref={ref}
         src={videoUrl}
@@ -50,7 +56,7 @@ const VideoChannel = forwardRef<HTMLVideoElement, Props>(({
         <div style={{
           position: 'absolute', top: 6, left: 8, pointerEvents: 'none',
           fontFamily: 'var(--mono)', fontSize: 9, fontWeight: 700,
-          color: channelId === 'front' ? 'var(--acc)' : channelId === 'rear' ? '#4da6ff' : 'var(--txt3)',
+          color: channelColor(channelId),
           background: 'rgba(0,0,0,.7)', padding: '2px 6px', borderRadius: 3,
           letterSpacing: '.08em',
         }}>

@@ -1,3 +1,5 @@
+import type { ChannelId } from '../channels'
+
 // In dev, the Vite proxy buffers responses and strips Content-Length / range
 // headers, making <video> elements non-seekable. Point directly at the backend
 // for footage URLs so the browser gets proper HTTP 206 Range responses.
@@ -11,7 +13,7 @@ export interface DayEntry {
 export interface LibraryClip {
   id: string
   filename: string
-  channel: 'front' | 'rear' | 'unknown'
+  channel: ChannelId
   session_id: string | null
   recorded_at: string | null
   duration_sec: number | null

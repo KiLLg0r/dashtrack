@@ -2,7 +2,7 @@
 DashTrack — library API routes.
 
 GET  /api/library                       list all indexed clips
-GET  /api/library/session/{session_id}  both clips in a session with GPX
+GET  /api/library/session/{session_id}  all clips in a session with GPX
 GET  /api/library/{clip_id}             single clip metadata + GPX
 GET  /api/footage/{clip_id}             stream video file (Range-request capable)
 """
@@ -52,6 +52,10 @@ class ClipDetailResponse(ClipResponse):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+# Canonical channel display / playback order: front, interior, rear, then rest.
+_CHANNEL_RANK = {"front": 0, "interior": 1, "rear": 2}
 
 
 def _to_response(clip: Clip, peer_id: str | None = None) -> ClipResponse:
@@ -170,9 +174,11 @@ async def get_clips_batch(body: BatchRequest):
                 if c.session_id:
                     groups.setdefault(c.session_id, []).append(c.id)
             for grp_ids in groups.values():
-                if len(grp_ids) == 2:
-                    peer_map[grp_ids[0]] = grp_ids[1]
-                    peer_map[grp_ids[1]] = grp_ids[0]
+                # Peer = first sibling in the session (any channel count ≥ 2).
+                for id_ in grp_ids:
+                    siblings = [x for x in grp_ids if x != id_]
+                    if siblings:
+                        peer_map[id_] = siblings[0]
 
         clip_by_id = {c.id: c for c in clips}
         # Preserve request order
@@ -232,7 +238,7 @@ async def list_days(
 
 @router.get("/api/library/session/{session_id}", response_model=list[ClipDetailResponse])
 async def get_session_clips(session_id: str):
-    """Return all clips in a session (front + rear) with full GPX."""
+    """Return all clips in a session (front / interior / rear) with full GPX."""
     with Session(get_engine()) as sess:
         clips = sess.exec(
             select(Clip).where(
@@ -243,10 +249,10 @@ async def get_session_clips(session_id: str):
         if not clips:
             raise HTTPException(404, f"Session {session_id} not found")
 
-        # Sort: front first, rear second
-        clips = sorted(clips, key=lambda c: (0 if c.channel == "front" else 1))
-        peer_map = {clips[0].id: clips[1].id, clips[1].id: clips[0].id} if len(clips) == 2 else {}
-        return [_to_detail(c, peer_map.get(c.id)) for c in clips]
+        # Canonical channel order: front, interior, rear, then anything else.
+        clips = sorted(clips, key=lambda c: _CHANNEL_RANK.get(c.channel, 99))
+        peer_of = {c.id: next((o.id for o in clips if o.id != c.id), None) for c in clips}
+        return [_to_detail(c, peer_of[c.id]) for c in clips]
 
 
 # ── Re-index (must be above {clip_id} wildcard routes) ───────────────────────

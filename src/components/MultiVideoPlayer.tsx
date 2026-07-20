@@ -33,6 +33,14 @@ export default function MultiVideoPlayer() {
   const isPip           = videoLayout === 'pip' && displayChannels.length > 1
   const isSideBySide    = videoLayout === 'side-by-side' && displayChannels.length > 1
 
+  // Resolve the primary to an actual channel — the upload path keeps
+  // primaryChannelId='front' while its only channel is 'upload'.
+  const resolvedPrimaryId = allChannels.some(c => c.id === primaryChannelId)
+    ? primaryChannelId
+    : (allChannels[0]?.id ?? primaryChannelId)
+  // Non-primary channels in render order — used to stack PiP thumbnails.
+  const secondaryIds = allChannels.filter(c => c.id !== resolvedPrimaryId).map(c => c.id)
+
   const switchSrc = (vid: HTMLVideoElement, url: string, seekTime?: number) => {
     if (intendedSrcs.current.get(vid) !== url) {
       intendedSrcs.current.set(vid, url)
@@ -115,10 +123,9 @@ export default function MultiVideoPlayer() {
           switchSrc(vid, clip.videoUrl, localPoint.videoSec)
           if (useStore.getState().playing) vid.play().catch(() => {})
         }
-        if (clip.peerVideoUrl) {
-          const peerChannelId = clip.channel === 'front' ? 'rear' : 'front'
-          const peerVid = vidRefs.current.get(peerChannelId)
-          if (peerVid) switchSrc(peerVid, clip.peerVideoUrl, localPoint.videoSec)
+        for (const pv of clip.peerVideoUrls ?? []) {
+          const peerVid = vidRefs.current.get(pv.channel)
+          if (peerVid) switchSrc(peerVid, pv.videoUrl, localPoint.videoSec)
         }
         return
       }
@@ -174,11 +181,10 @@ export default function MultiVideoPlayer() {
       switchSrc(vid, nextClip.videoUrl, nextClip.trimStart)
       if (playing) vid.play().catch(() => {})
     }
-    if (nextClip.peerVideoUrl) {
-      const peerChannelId = nextClip.channel === 'front' ? 'rear' : 'front'
-      const peerVid = vidRefs.current.get(peerChannelId)
+    for (const pv of nextClip.peerVideoUrls ?? []) {
+      const peerVid = vidRefs.current.get(pv.channel)
       if (peerVid) {
-        switchSrc(peerVid, nextClip.peerVideoUrl, nextClip.trimStart)
+        switchSrc(peerVid, pv.videoUrl, nextClip.trimStart)
         if (playing) peerVid.play().catch(() => {})
       }
     }
@@ -204,39 +210,47 @@ export default function MultiVideoPlayer() {
 
   if (!displayChannels.length && !allChannels.length) return null
 
-  const channelProps = (ch: typeof allChannels[0], i: number) => ({
-    ref: setRef(ch.id),
-    videoUrl: ch.videoUrl!,
-    channelId: ch.id,
-    isPrimary: ch.id === primaryChannelId || i === 0,
-    label: hasBothChannels ? ch.label : undefined,
-    aspectRatio: videoAspectRatio,
-    onTimeUpdate: handleTimeUpdate,
-    onLoadedMetadata: (e: React.SyntheticEvent<HTMLVideoElement>) => {
-      if (ch.id === primaryChannelId || i === 0) {
-        const vid = e.currentTarget as HTMLVideoElement
-        setVideoDuration(vid.duration)
-        if (vid.videoWidth && vid.videoHeight)
-          setVideoAspectRatio(`${vid.videoWidth}/${vid.videoHeight}`)
-      }
-    },
-    onPlay:  () => { if (ch.id === primaryChannelId || i === 0) setPlaying(true)  },
-    onPause: () => { if (ch.id === primaryChannelId || i === 0) setPlaying(false) },
-    onEnded: () => { if (ch.id === primaryChannelId || i === 0) setPlaying(false) },
-  })
+  const channelProps = (ch: typeof allChannels[0]) => {
+    const isPrimary = ch.id === resolvedPrimaryId
+    return {
+      ref: setRef(ch.id),
+      videoUrl: ch.videoUrl!,
+      channelId: ch.id,
+      isPrimary,
+      label: hasBothChannels ? ch.label : undefined,
+      aspectRatio: videoAspectRatio,
+      // In PiP, clicking a secondary thumbnail promotes it to the main slot.
+      onSelect: isPip && !isPrimary ? () => setPrimaryChannelId(ch.id) : undefined,
+      onTimeUpdate: handleTimeUpdate,
+      onLoadedMetadata: (e: React.SyntheticEvent<HTMLVideoElement>) => {
+        if (isPrimary) {
+          const vid = e.currentTarget as HTMLVideoElement
+          setVideoDuration(vid.duration)
+          if (vid.videoWidth && vid.videoHeight)
+            setVideoAspectRatio(`${vid.videoWidth}/${vid.videoHeight}`)
+        }
+      },
+      onPlay:  () => { if (isPrimary) setPlaying(true)  },
+      onPause: () => { if (isPrimary) setPlaying(false) },
+      onEnded: () => { if (isPrimary) setPlaying(false) },
+    }
+  }
 
-  const channelContainerStyle = (ch: typeof allChannels[0], i: number): React.CSSProperties => {
+  const channelContainerStyle = (ch: typeof allChannels[0]): React.CSSProperties => {
     const visible = channelFilter === 'all' || ch.id === channelFilter || ch.id === 'upload'
     if (!visible) return { display: 'none' }
-    const isPrimaryChannel = isPip ? ch.id === primaryChannelId : (ch.id === primaryChannelId || i === 0)
     if (isPip) {
-      return isPrimaryChannel
-        ? { position: 'absolute', inset: 0, flex: 'none' }
-        : {
-            position: 'absolute', bottom: 8, right: 8, width: '28%', zIndex: 10,
-            border: '2px solid rgba(255,255,255,.25)', borderRadius: 5,
-            overflow: 'hidden', boxShadow: '0 2px 12px rgba(0,0,0,.7)', flex: 'none',
-          }
+      if (ch.id === resolvedPrimaryId) return { position: 'absolute', inset: 0, flex: 'none' }
+      // Stack secondary thumbnails in a row along the bottom-right edge.
+      const secIdx = Math.max(0, secondaryIds.indexOf(ch.id))
+      return {
+        position: 'absolute',
+        bottom: 8,
+        right: `calc(${8 + secIdx * 8}px + ${secIdx * 28}%)`,
+        width: '28%', zIndex: 10,
+        border: '2px solid rgba(255,255,255,.25)', borderRadius: 5,
+        overflow: 'hidden', boxShadow: '0 2px 12px rgba(0,0,0,.7)', flex: 'none',
+      }
     }
     return { flex: '1 1 0', minHeight: 0, minWidth: 0 }
   }
@@ -259,11 +273,11 @@ export default function MultiVideoPlayer() {
         background: '#000',
         position: 'relative',
       }}>
-        {allChannels.map((ch, i) => (
+        {allChannels.map((ch) => (
           <VideoChannel
-            key={ch.id} {...channelProps(ch, i)}
-            fillHeight={isPip ? (ch.id === primaryChannelId || i === 0) : true}
-            containerStyle={channelContainerStyle(ch, i)}
+            key={ch.id} {...channelProps(ch)}
+            fillHeight={isPip ? ch.id === resolvedPrimaryId : true}
+            containerStyle={channelContainerStyle(ch)}
           />
         ))}
 
@@ -276,8 +290,9 @@ export default function MultiVideoPlayer() {
             </div>
             {isPip && (
               <button className="vbtn" onClick={() => {
-                const other = allChannels.find(c => c.id !== primaryChannelId)
-                if (other) setPrimaryChannelId(other.id)
+                const idx = allChannels.findIndex(c => c.id === resolvedPrimaryId)
+                const next = allChannels[(idx + 1) % allChannels.length]
+                if (next) setPrimaryChannelId(next.id)
               }} title="Swap focus"><Icon name="swap" size={14} /></button>
             )}
           </div>
